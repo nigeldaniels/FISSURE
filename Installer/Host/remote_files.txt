@@ -1,0 +1,13 @@
+Installer/install_apptainer_package.sh
+Installer/Host/common.sh
+Installer/Host/hardware.sh
+Installer/Host/prepare_host.sh
+Installer/Host/uhd.sh
+Installer/Host/usrp_x300.sh
+Installer/Host/hackrf.sh
+Installer/Host/rtlsdr.sh
+Installer/Host/wifi.sh
+Installer/Host/meshtastic.sh
+Tools/53-hackrf.rules
+Installer/Host/apptainer_packages.sh
+Installer/Host/support_bundle.sh
