@@ -43,16 +43,19 @@ From: ubuntu:24.04
         xauth \
         xvfb
 
-    # Ubuntu 24.04's installer upgrades setuptools before building legacy
-    # setup.py packages. Setuptools 81+ removes pkg_resources, which those
-    # packages still load, so constrain the entire installer subprocess.
-    printf 'setuptools<81\n' > /tmp/fissure-pip-constraints.txt
+    # Keep installer-owned recipes authoritative while preventing dependency
+    # upgrades incompatible with Noble's system Python/GNU Radio packages.
+    install -m 0644 \
+        /opt/FISSURE/Installer/Remote_Sensor_Node/requirements-image-constraints.txt \
+        /tmp/fissure-pip-constraints.txt
     export PIP_CONSTRAINT=/tmp/fissure-pip-constraints.txt
 
     cd /opt/FISSURE
     chmod 0755 install
     xvfb-run -a ./install --os "Ubuntu 24.04" --mode SensorNode
-    python3 -c "import pkg_resources, pydotplus"
+    # The legacy installer can mask individual recipe failures. Check critical
+    # imports explicitly here; %test still validates the complete SensorNode.
+    python3 -c "import pkg_resources, pydotplus, numpy, tensorflow"
     rm -f /tmp/fissure-pip-constraints.txt
 
     # Runtime keys are supplied by a read-only bind. Never ship build-host

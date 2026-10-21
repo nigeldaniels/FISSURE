@@ -951,7 +951,7 @@ then
   cd libbtbb
   mkdir build
   cd build
-  cmake ..
+  cmake -DPACKAGE_VERSION=1.0 ..  # libbtbb's Python template otherwise gets an empty version
   make
   sudo make install
   sudo ldconfig
