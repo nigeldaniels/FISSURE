@@ -30,7 +30,7 @@ async def prepare_remote_host(
         environment = await inspect_remote_environment(connection, destination)
         with tempfile.TemporaryDirectory(prefix="fissure-host.") as name:
             archive = Path(name) / "host-support.tar"
-            await asyncio.to_thread(create_installer_archive, archive)
+            await asyncio.to_thread(create_installer_archive, archive, options.host_support_dir)
             stage = await create_remote_stage(connection)
             await scp_with_progress(asyncssh, str(archive), (connection, f"{stage}/installer.tar"))
             await run_remote(connection, shlex.join([
@@ -64,10 +64,14 @@ def host_command(stage: str, user: str, options: DeployOptions) -> list[str]:
         command.append("--check-only")
     if not options.install_apptainer:
         command.append("--no-install-apptainer")
+    if options.offline:
+        command.append("--offline")
+    if options.host_support_dir:
+        command.append(f"--host-support={stage}/host-support")
     return command
 
 
-def create_installer_archive(output: Path) -> None:
+def create_installer_archive(output: Path, bundle: Path | None = None) -> None:
     """Stage only installer code and its declared asset, never runtime secrets."""
     manifest = REPOSITORY_ROOT / "Installer/Host/remote_files.txt"
     paths = [REPOSITORY_ROOT / name for name in manifest.read_text().splitlines() if name]
@@ -77,3 +81,28 @@ def create_installer_archive(output: Path) -> None:
                     or path.is_symlink() or not path.is_file()):
                 raise HostPreparationError(f"Installer asset is not a regular file: {path}")
             archive.add(path, arcname=str(path.relative_to(REPOSITORY_ROOT)), recursive=False)
+        if bundle:
+            _add_support_bundle(archive, bundle)
+
+
+def _add_support_bundle(archive: tarfile.TarFile, bundle: Path) -> None:
+    """Transfer the declared bundle shape without links or unrelated local files."""
+    expected = {"bundle.info", "Packages", "SHA256SUMS", "package-versions.txt", "packages"}
+    if {path.name for path in bundle.iterdir()} != expected:
+        raise HostPreparationError("Host-support bundle contains unexpected or missing entries")
+    for path in bundle.iterdir():
+        if path.is_symlink():
+            raise HostPreparationError(f"Bundle links are not supported: {path}")
+        if path.name == "packages":
+            if not path.is_dir():
+                raise HostPreparationError("Bundle packages entry must be a directory")
+            for package in path.iterdir():
+                _add_bundle_file(archive, bundle, package)
+        else:
+            _add_bundle_file(archive, bundle, path)
+
+
+def _add_bundle_file(archive: tarfile.TarFile, bundle: Path, path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise HostPreparationError(f"Bundle entry is not a regular file: {path}")
+    archive.add(path, arcname=f"host-support/{path.relative_to(bundle)}", recursive=False)

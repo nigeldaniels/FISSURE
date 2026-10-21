@@ -66,6 +66,8 @@ class DeployOptions:
     prepare_host: bool = False
     hardware: tuple[str, ...] = ()
     skip_host_prep: bool = False
+    offline: bool = False
+    host_support_dir: Path | None = None
 
 
 def validate_options(options: DeployOptions) -> None:
@@ -233,6 +235,8 @@ def options_from_arguments(
         return Path(value).expanduser() if value else default
 
     try:
+        if args.get("--host-support") == "":
+            raise DeploymentError("--host-support must name a bundle directory")
         source_dir = path("--source", repository_root) or repository_root
         raw_target = args["<destination>"] or args["--target"]
         return DeployOptions(
@@ -269,6 +273,8 @@ def options_from_arguments(
             prepare_host=bool(args.get("--prepare-host")),
             hardware=_parse_hardware(args.get("--hardware")),
             skip_host_prep=bool(args.get("--skip-host-prep")),
+            offline=bool(args.get("--offline") or args.get("--host-support")),
+            host_support_dir=path("--host-support") if args.get("--host-support") else None,
         )
     except (TypeError, ValueError) as exc:
         raise DeploymentError(f"Invalid numeric option: {exc}") from exc
@@ -291,3 +297,15 @@ def _validate_host_options(options: DeployOptions) -> None:
         raise DeploymentError("--hardware requires deployment or --prepare-host")
     if options.skip_host_prep and (not _is_full_deployment(options) or options.hardware):
         raise DeploymentError("--skip-host-prep requires deployment without --hardware")
+    if (options.offline or options.host_support_dir) and not is_preparation:
+        raise DeploymentError("Offline host options require deployment or --prepare-host")
+    if options.offline and options.hardware:
+        raise DeploymentError("Offline hardware preparation is not supported yet; use --hardware=none")
+    if options.host_support_dir:
+        if options.skip_host_prep:
+            raise DeploymentError("--skip-host-prep cannot consume a host-support bundle")
+        if options.host_support_dir.is_symlink() or not options.host_support_dir.is_dir():
+            raise DeploymentError("--host-support must be a regular directory")
+        for name in ("bundle.info", "SHA256SUMS", "Packages", "package-versions.txt"):
+            if not (options.host_support_dir / name).is_file():
+                raise DeploymentError(f"Host-support bundle is missing {name}")

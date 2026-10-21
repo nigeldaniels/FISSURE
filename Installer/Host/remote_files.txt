@@ -9,3 +9,5 @@ Installer/Host/rtlsdr.sh
 Installer/Host/wifi.sh
 Installer/Host/meshtastic.sh
 Tools/53-hackrf.rules
+Installer/Host/apptainer_packages.sh
+Installer/Host/support_bundle.sh

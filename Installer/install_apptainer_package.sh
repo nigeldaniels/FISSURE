@@ -1,64 +1,38 @@
 #!/bin/bash
 set -euo pipefail
+APPTAINER_INSTALL_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$APPTAINER_INSTALL_DIR/Host/common.sh"
+source "$APPTAINER_INSTALL_DIR/Host/apptainer_packages.sh"
+source "$APPTAINER_INSTALL_DIR/Host/support_bundle.sh"
 
-has_setuid_support() {
-    command -v apptainer >/dev/null 2>&1 &&
-        apptainer buildcfg 2>/dev/null |
-        grep -q '^APPTAINER_SUID_INSTALL=1$'
+main() {
+    local check_only=false offline=false bundle='' argument
+    for argument in "$@"; do
+        case "$argument" in
+            --check-only) check_only=true ;;
+            --offline) offline=true ;;
+            --host-support=*) bundle=${argument#*=}; offline=true ;;
+            *) host_fail "Unknown Apptainer installer option: $argument"; return 2 ;;
+        esac
+    done
+    if [[ -n "$bundle" ]]; then
+        bundle=$(realpath -- "$bundle")
+        validate_support_bundle "$bundle"
+    fi
+    if has_setuid_support; then
+        echo '[✓] Existing Apptainer installation has setuid support.'; return 0
+    fi
+    if $check_only; then host_fail 'Apptainer with setuid support is required.'; return 1; fi
+    (( EUID == 0 )) || { host_fail 'Run the Apptainer package installer as root.'; return 1; }
+    if $offline; then
+        [[ -n "$bundle" ]] || { host_fail 'Offline installation requires --host-support.'; return 1; }
+        install_apptainer_offline "$bundle"
+    else
+        validate_host_platform
+        install_apptainer_online
+    fi
+    has_setuid_support || { host_fail 'Installation did not provide Apptainer setuid support.'; return 1; }
+    echo "[✓] $(apptainer version)"
 }
 
-if [[ ${1:-} == --check-only ]]; then
-    has_setuid_support || { echo "Apptainer with setuid support is required." >&2; exit 1; }
-    exit 0
-fi
-[[ $# == 0 ]] || { echo "Unknown Apptainer installer argument." >&2; exit 2; }
-
-if has_setuid_support; then
-    echo "[✓] Existing Apptainer installation has setuid support."
-    exit 0
-fi
-
-if command -v apptainer >/dev/null 2>&1; then
-    echo "[!] Existing Apptainer installation does not have setuid support."
-fi
-
-if [ "$(id -u)" -ne 0 ]; then
-    echo "Run the Apptainer package installer as root." >&2
-    exit 1
-fi
-
-. /etc/os-release
-case " ${ID:-} ${ID_LIKE:-} " in
-    *" ubuntu "*) ;;
-    *)
-        echo "Automatic Apptainer installation supports Ubuntu-derived systems only." >&2
-        exit 1
-        ;;
-esac
-
-architecture=$(dpkg --print-architecture)
-case "$architecture" in
-    amd64|arm64) ;;
-    *)
-        echo "Automatic Apptainer installation does not support $architecture." >&2
-        exit 1
-        ;;
-esac
-
-echo "[*] Installing Apptainer from the official Ubuntu PPA..."
-# GitHub's Debian package is AMD64-only; the PPA also supports ARM64 nodes.
-apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common
-if ! grep -Rqs "ppa.launchpadcontent.net/apptainer/ppa" \
-    /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
-    add-apt-repository -y ppa:apptainer/ppa
-fi
-apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install -y apptainer-suid
-
-if ! has_setuid_support; then
-    echo "Apptainer installation did not provide setuid support." >&2
-    exit 1
-fi
-
-echo "[✓] $(apptainer version)"
+main "$@"

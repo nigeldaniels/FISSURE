@@ -16,6 +16,8 @@ Options:
   --deploy                   Deploy an existing SIF without building one.
   --prepare-host             Prepare host support without deploying a SIF.
   --hardware=<list>          Host support: uhd,usrp-x300,hackrf,rtlsdr,wifi,meshtastic.
+  --host-support=<directory>  Offline host-support bundle; implies --offline.
+  --offline                  Never download host prerequisites from the internet.
   --skip-host-prep           Validate existing prerequisites without changing them.
   -i <path> --identity=<path>  SSH private key; omit to enter a password.
   --config=<path>            Values for rendered YAML (default: installed YAML).
