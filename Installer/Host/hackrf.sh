@@ -1,35 +1,12 @@
 #!/bin/bash
-set -e
-
-# Extracted local installer recipe; arguments replace caller-owned shell state.
-HOST_FISSURE_DIR=$1
-APPTAINER_FISSURE_DIR=$2
-MODE=$3
-AUTO_LAUNCH_SENSOR_NODE=$4
-
-echo "[*] Installing HackRF host dependencies and udev rules..."
-sudo apt-get update
-sudo apt-get install -y hackrf libhackrf-dev
-
-# Install udev rule if present in FISSURE Tools
-if [ -f "$HOST_FISSURE_DIR/Tools/53-hackrf.rules" ]; then
-    echo "[*] Copying HackRF udev rule to /etc/udev/rules.d/..."
-    sudo cp "$HOST_FISSURE_DIR/Tools/53-hackrf.rules" /etc/udev/rules.d/53-hackrf.rules
-else
-    echo "[!] HackRF udev rule not found at $HOST_FISSURE_DIR/Tools/53-hackrf.rules"
-    echo "    Skipping rule installation (non-critical)."
-fi
-
-# Reload udev rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-
-# Verify device access and version
-echo "[*] Verifying HackRF installation..."
-if command -v hackrf_info >/dev/null 2>&1; then
-    hackrf_info || echo "[!] HackRF device not detected (may not be plugged in)."
-else
-    echo "[!] hackrf_info not found — check that hackrf-tools installed correctly."
-fi
-
-echo "[✓] HackRF host configuration complete."
+prepare_hackrf() {
+    local source_root=$1
+    local rules="$source_root/Tools/53-hackrf.rules"
+    [[ -f "$rules" ]] || { host_fail "HackRF udev rules are missing: $rules"; return 1; }
+    host_install_packages hackrf libhackrf-dev
+    host_root install -m 0644 "$rules" /etc/udev/rules.d/53-hackrf.rules
+    host_reload_udev
+    command -v hackrf_info >/dev/null || { host_fail "hackrf_info is missing."; return 1; }
+    # Installing support does not require a plugged-in radio.
+    hackrf_info || echo "[i] HackRF detection failed; check power and USB connection."
+}

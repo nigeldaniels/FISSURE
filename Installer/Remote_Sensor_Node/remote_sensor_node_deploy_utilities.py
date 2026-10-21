@@ -1,13 +1,5 @@
 """Remote shell scripts used by the sensor-node deployer."""
 
-from pathlib import Path
-
-
-APPTAINER_INSTALLER = (
-    Path(__file__).resolve().parent.parent / "install_apptainer_package.sh"
-)
-
-
 class DeploymentUtilities:
     """Shell scripts executed on the remote sensor node."""
 
@@ -45,8 +37,6 @@ else
 fi
 printf '%s\\n' "$privilege"
 """
-
-    INSTALL_APPTAINER_SCRIPT = APPTAINER_INSTALLER.read_text(encoding="utf-8")
 
     INSTALL_SCRIPT = """\
 set -eu

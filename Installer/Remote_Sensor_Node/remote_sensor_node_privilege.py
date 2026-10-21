@@ -34,30 +34,19 @@ class RemoteEnvironment:
 async def prepare_remote_environment(
     connection: Any,
     destination: str,
-    install_apptainer: bool,
 ) -> RemoteEnvironment:
-    """Validate privilege and install Apptainer when allowed and necessary."""
+    """Read-only preflight for maintenance; host preparation owns installation."""
+    environment = await inspect_remote_environment(connection, destination)
+    if not environment.apptainer:
+        raise PrivilegeError("Apptainer is not installed on the remote host; run --prepare-host")
+    return environment
+
+
+async def inspect_remote_environment(connection: Any, destination: str) -> RemoteEnvironment:
+    """Acquire privilege without requiring or installing Apptainer."""
     result = await _run(connection, DeploymentUtilities.PREFLIGHT_SCRIPT)
     user, group, apptainer, mode = _parse_preflight(result.stdout)
     privilege = await _acquire_privilege(connection, destination, mode)
-
-    if not apptainer:
-        if not install_apptainer:
-            raise PrivilegeError("Apptainer is not installed on the remote host")
-        print("[*] Apptainer is missing; installing it from the official PPA")
-        await run_root_script(
-            connection,
-            DeploymentUtilities.INSTALL_APPTAINER_SCRIPT,
-            [],
-            privilege,
-        )
-        apptainer = (
-            await _run(connection, "command -v apptainer")
-        ).stdout.strip()
-        if not apptainer:
-            raise PrivilegeError("Apptainer installation did not provide a binary")
-
-    print(f"[✓] Remote prerequisites passed ({user}, {apptainer})")
     return RemoteEnvironment(user, group, apptainer, privilege)
 
 

@@ -1,39 +1,23 @@
 #!/bin/bash
-set -e
-
-# Extracted local installer recipe; arguments replace caller-owned shell state.
-HOST_FISSURE_DIR=$1
-APPTAINER_FISSURE_DIR=$2
-MODE=$3
-AUTO_LAUNCH_SENSOR_NODE=$4
-
-echo "[*] Installing UHD host dependencies and configuring USB access..."
-sudo apt-get update
-sudo apt-get install -y uhd-host
-
-# Copy udev rule if present
-if [ -f /usr/lib/uhd/utils/uhd-usrp.rules ]; then
-    sudo cp /usr/lib/uhd/utils/uhd-usrp.rules /etc/udev/rules.d/
-elif [ -f /usr/share/uhd/utils/uhd-usrp.rules ]; then
-    sudo cp /usr/share/uhd/utils/uhd-usrp.rules /etc/udev/rules.d/
-else
-    echo "[!] UHD udev rule not found — continuing anyway."
-fi
-
-# Reload udev rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-
-# Ensure plugdev group exists and user has access
-if ! getent group plugdev >/dev/null; then
-    sudo groupadd plugdev
-fi
-HOST_USER="${SUDO_USER:-$USER}"
-sudo usermod -aG plugdev "$HOST_USER"
-
-echo "[*] Downloading UHD FPGA images..."
-sudo mkdir -p /usr/share/uhd
-sudo chmod -R 777 /usr/share/uhd
-uhd_images_downloader || echo "[!] UHD image download failed (check network)."
-
-echo "[✓] UHD host configuration complete."
+# UHD software and USB access are shared by B2xx and X3xx preparation.
+prepare_uhd() {
+    local host_user=$1 rules=''
+    host_install_packages uhd-host
+    for rules in /usr/lib/uhd/utils/uhd-usrp.rules /usr/share/uhd/utils/uhd-usrp.rules; do
+        if [[ -f "$rules" ]]; then break; fi
+    done
+    [[ -f "$rules" ]] || { host_fail "UHD udev rules are missing."; return 1; }
+    host_root install -m 0644 "$rules" /etc/udev/rules.d/uhd-usrp.rules
+    if ! getent group plugdev >/dev/null; then host_root groupadd plugdev; fi
+    host_root usermod -aG plugdev "$host_user"
+    host_reload_udev
+    # Run as root rather than making the firmware directory world-writable.
+    if command -v uhd_images_downloader >/dev/null; then
+        host_root uhd_images_downloader
+    elif [[ -x /usr/lib/uhd/utils/uhd_images_downloader.py ]]; then
+        host_root /usr/lib/uhd/utils/uhd_images_downloader.py
+    else
+        host_fail "UHD image downloader is missing."; return 1
+    fi
+    echo "[✓] UHD host support prepared; reconnect USB radios if necessary."
+}

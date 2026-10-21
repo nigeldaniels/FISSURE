@@ -14,6 +14,7 @@ from remote_sensor_node_templates import (
 
 REMOTE_DIR_PATTERN = re.compile(r"^/[A-Za-z0-9._/-]+$")
 SERVICE_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]+$")
+SUPPORTED_HARDWARE = ("uhd", "usrp-x300", "hackrf", "rtlsdr", "wifi", "meshtastic")
 CLEAR_DATA_KINDS = ("artifacts", "logs", "recordings")
 
 
@@ -62,10 +63,14 @@ class DeployOptions:
     clear_data: str | None = None
     sync_plugins_dir: Path | None = None
     sync_source_dir: Path | None = None
+    prepare_host: bool = False
+    hardware: tuple[str, ...] = ()
+    skip_host_prep: bool = False
 
 
 def validate_options(options: DeployOptions) -> None:
     """Validate paths, action selection, and required local inputs."""
+    _validate_host_options(options)
     _validate_action_selection(options)
     _validate_action_target(options)
     if not options.build_image:
@@ -94,6 +99,7 @@ def _validate_action_selection(options: DeployOptions) -> None:
         choices = ", ".join(CLEAR_DATA_KINDS)
         raise DeploymentError(f"--clear-data must be one of: {choices}")
     actions = (
+        options.prepare_host,
         options.build_image,
         options.deploy_image,
         options.health_only,
@@ -158,6 +164,7 @@ def _is_full_deployment(options: DeployOptions) -> bool:
     return not any(
         (
             options.build_image,
+            options.prepare_host,
             options.health_only,
             options.uninstall,
             options.update_config_file,
@@ -171,6 +178,8 @@ def _is_full_deployment(options: DeployOptions) -> bool:
 
 
 def _required_local_inputs(options: DeployOptions) -> list[Path]:
+    if options.prepare_host:
+        return []
     if options.build_image:
         return [APPTAINER_TEMPLATE, options.source_dir / "fissure/Sensor_Node"]
     if options.update_config_file:
@@ -198,6 +207,7 @@ def _required_local_inputs(options: DeployOptions) -> list[Path]:
 def _needs_no_local_files(options: DeployOptions) -> bool:
     return any(
         (
+            options.prepare_host,
             options.health_only,
             options.uninstall,
             options.restart,
@@ -256,6 +266,28 @@ def options_from_arguments(
             clear_data=args["--clear-data"],
             sync_plugins_dir=path("--sync-plugins"),
             sync_source_dir=path("--sync-source"),
+            prepare_host=bool(args.get("--prepare-host")),
+            hardware=_parse_hardware(args.get("--hardware")),
+            skip_host_prep=bool(args.get("--skip-host-prep")),
         )
     except (TypeError, ValueError) as exc:
         raise DeploymentError(f"Invalid numeric option: {exc}") from exc
+
+
+
+
+def _parse_hardware(value: str | None) -> tuple[str, ...]:
+    if value is None or value == "none":
+        return ()
+    names = value.split(",")
+    if any(name not in SUPPORTED_HARDWARE for name in names):
+        raise DeploymentError("--hardware must contain supported names or none")
+    return tuple(dict.fromkeys(names))
+
+
+def _validate_host_options(options: DeployOptions) -> None:
+    is_preparation = options.prepare_host or _is_full_deployment(options)
+    if options.hardware and not is_preparation:
+        raise DeploymentError("--hardware requires deployment or --prepare-host")
+    if options.skip_host_prep and (not _is_full_deployment(options) or options.hardware):
+        raise DeploymentError("--skip-host-prep requires deployment without --hardware")

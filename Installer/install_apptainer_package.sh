@@ -7,6 +7,12 @@ has_setuid_support() {
         grep -q '^APPTAINER_SUID_INSTALL=1$'
 }
 
+if [[ ${1:-} == --check-only ]]; then
+    has_setuid_support || { echo "Apptainer with setuid support is required." >&2; exit 1; }
+    exit 0
+fi
+[[ $# == 0 ]] || { echo "Unknown Apptainer installer argument." >&2; exit 2; }
+
 if has_setuid_support; then
     echo "[✓] Existing Apptainer installation has setuid support."
     exit 0

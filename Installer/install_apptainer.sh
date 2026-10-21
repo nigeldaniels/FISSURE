@@ -49,6 +49,7 @@ USRP_X300=true
 IQENGINE=true
 TAKSERVER=false
 XPRA=true
+HARDWARE_SELECTION=""
 
 
 #############################################
@@ -56,6 +57,13 @@ XPRA=true
 #############################################
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
+        --hardware=*)
+            HARDWARE_SELECTION=${1#*=}
+            if [[ -z "$HARDWARE_SELECTION" ]]; then
+                echo "Hardware selection must not be empty; use none." >&2
+                exit 2
+            fi
+            ;;
         --host-os) HOST_OS="$2"; shift ;;
         --apptainer-os) APPTAINER_OS="$2"; shift ;;
         --mode) MODE="$2"; shift ;;
@@ -87,6 +95,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --auto-launch-sensor-node      Launch the Apptainer Sensor Node after graphical login"
             echo "  --db                           Configure PostgreSQL host environment"
             echo "  --meshtastic                   Configure Meshtastic host environment"
+            echo "  --hardware=LIST               Override hardware defaults (or none)"
             echo "  --uhd                          Configure UHD (USRP) host drivers"
             echo "  --rtlsdr                       Configure RTL-SDR host setup"
             echo "  --hackrf                       Configure HackRF host drivers"
@@ -130,6 +139,11 @@ case "${MODE,,}" in
         exit 1
         ;;
 esac
+
+if [[ -n "$HARDWARE_SELECTION" ]]; then
+    source "$INSTALLER_DIR/Host/hardware.sh"
+    validate_hardware "$HARDWARE_SELECTION"
+fi
 
 echo "[*] FISSURE install mode: $MODE"
 
@@ -186,13 +200,22 @@ if $INSTALL_HOST_DEPS; then
         fi
         # ---------- End Auto-Launch Sensor Node ----------
 
-        # ---------- Meshtastic Host Setup ----------
-        if $MESHTASTIC; then
-            bash "$INSTALLER_DIR/Host/meshtastic.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
-
+        # Resolve local legacy defaults once, then pass an explicit selection.
+        if [[ -z "$HARDWARE_SELECTION" ]]; then
+            selected=()
+            $UHD && selected+=(uhd)
+            $USRP_X300 && selected+=(usrp-x300)
+            $HACKRF && selected+=(hackrf)
+            $RTLSDR && selected+=(rtlsdr)
+            $WIFI && selected+=(wifi)
+            $MESHTASTIC && selected+=(meshtastic)
+            HARDWARE_SELECTION=$(IFS=,; echo "${selected[*]}")
+            HARDWARE_SELECTION=${HARDWARE_SELECTION:-none}
         fi
-        # ---------- End Meshtastic Host Setup ----------
+        bash "$INSTALLER_DIR/Host/prepare_host.sh" \
+            "--hardware=$HARDWARE_SELECTION" "--user=${SUDO_USER:-$USER}" \
+            "--source-root=$HOST_FISSURE_DIR" --no-install-apptainer
+
 
         # ---------- PostgreSQL Host Setup ----------
         if $DB; then
@@ -202,45 +225,10 @@ if $INSTALL_HOST_DEPS; then
         fi
         # ---------- End PostgreSQL Host Setup ----------
 
-        # ---------- UHD Host Setup ----------
-        if $UHD; then
-            bash "$INSTALLER_DIR/Host/uhd.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
-
-        fi
-        # ---------- End UHD Host Setup ----------
         
-        # ---------- RTL-SDR Host Setup ----------
-        if $RTLSDR; then
-            bash "$INSTALLER_DIR/Host/rtlsdr.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
 
-        fi
-        # ---------- End RTL-SDR Host Setup ----------
 
-        # ---------- HackRF Host Setup ----------
-        if $HACKRF; then
-            bash "$INSTALLER_DIR/Host/hackrf.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
 
-        fi
-        # ---------- End HackRF Host Setup ----------
-
-        # ---------- Wi-Fi Host Setup (rtl8812au via aircrack-ng) ----------
-        if $WIFI; then
-            bash "$INSTALLER_DIR/Host/wifi.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
-
-        fi
-        # ---------- End Wi-Fi Host Setup ----------
-
-        # ---------- USRP X300/X310 Host Setup ----------
-        if $USRP_X300; then
-            bash "$INSTALLER_DIR/Host/usrp_x300.sh" \
-                "$HOST_FISSURE_DIR" "$APPTAINER_FISSURE_DIR" "$MODE" "$AUTO_LAUNCH_SENSOR_NODE"
-
-        fi
-        # ---------- End USRP X300/X310 Host Setup ----------
 
         # ---------- IQEngine Host Setup ----------
         if $IQENGINE; then

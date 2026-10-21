@@ -3,8 +3,7 @@
 import asyncio
 import os
 import shutil
-
-from remote_sensor_node_deploy_utilities import DeploymentUtilities
+from pathlib import Path
 
 
 class LocalApptainerError(RuntimeError):
@@ -19,7 +18,7 @@ async def ensure_local_apptainer(allow_install: bool) -> str:
     if not allow_install:
         raise LocalApptainerError("Apptainer is not installed locally")
 
-    command = ["bash", "-c", DeploymentUtilities.INSTALL_APPTAINER_SCRIPT]
+    command = ["bash", str(Path(__file__).resolve().parent.parent / "install_apptainer_package.sh")]
     if os.geteuid() != 0:
         sudo = shutil.which("sudo")
         if not sudo:
