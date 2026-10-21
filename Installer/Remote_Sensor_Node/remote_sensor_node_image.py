@@ -23,10 +23,11 @@ async def build_sensor_node_image(options: DeployOptions, temp_dir: Path) -> Pat
         temp_dir / APPTAINER_TEMPLATE.stem,
     )
     options.output_image.parent.mkdir(parents=True, exist_ok=True)
-    command = [apptainer, "build", "--force"]
-    if not options.build_with_sudo:
-        command.append("--fakeroot")
-    command.extend([str(options.output_image), str(definition)])
+    builder = Path(__file__).resolve().parent.parent / "Apptainer/build_image.sh"
+    command = [
+        "bash", str(builder), "sif", str(options.output_image), str(definition),
+        "root" if options.build_with_sudo else "fakeroot", apptainer,
+    ]
     if options.build_with_sudo:
         command.insert(0, "sudo")
 
