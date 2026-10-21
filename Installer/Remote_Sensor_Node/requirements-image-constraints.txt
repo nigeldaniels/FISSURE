@@ -1,0 +1,12 @@
+# Ubuntu 24.04 SensorNode image compatibility; consumed by the existing installer.
+# Noble's GNU Radio/scientific packages use NumPy 1.26. Pip cannot uninstall the
+# distro copy (no RECORD), and upgrading to NumPy 2 also breaks their extension ABI.
+numpy==1.26.4
+# The reviewed Python 3.12-compatible TensorFlow release retains NumPy <2 support.
+# Constrain both names because the existing recipe selects tensorflow on Pi kernels.
+tensorflow==2.17.1
+tensorflow-cpu==2.17.1
+# Legacy setup.py recipes still import pkg_resources.
+setuptools<81
+# libbtbb's older minimum-version declaration is rejected by CMake 4.
+cmake<4

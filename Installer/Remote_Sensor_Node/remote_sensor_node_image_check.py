@@ -41,6 +41,15 @@ def ensure_apptainer_display():
     # virtual display so Dashboard imports cannot depend on host X credentials.
     environment = os.environ.copy()
     environment[XVFB_ACTIVE_ENV] = "1"
+    # %test can inherit host-only temporary paths. xvfb-run uses TMPDIR
+    # directly instead of Python's fallback, so discard unusable paths before
+    # re-exec while retaining valid container-specific overrides.
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        directory = environment.get(name)
+        if directory and not (
+            Path(directory).is_dir() and os.access(directory, os.W_OK | os.X_OK)
+        ):
+            environment.pop(name)
     os.execve(
         xvfb_run,
         [xvfb_run, "-a", sys.executable, *sys.argv],
