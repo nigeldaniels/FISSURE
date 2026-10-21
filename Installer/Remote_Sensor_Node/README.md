@@ -80,6 +80,109 @@ connection. Rendering performs no host discovery and does not change the
 installed source YAML. Certificates remain ordinary external files because
 secrets must never be placed in templates.
 
+## Host preparation
+
+Deployment prepares Apptainer when needed. Hardware preparation is explicit;
+no hardware flag means no additional radio setup. A prepared runtime must have
+Apptainer setuid support, matching the standard FISSURE Apptainer installer.
+
+Prepare a host independently of any image, configuration, or certificates:
+
+```bash
+Installer/Remote_Sensor_Node/deploy_remote_sensor_node.py \
+  fissure@192.0.2.20 --prepare-host -i ~/.ssh/fissure-node \
+  --hardware=uhd,hackrf
+```
+
+Or prepare hardware as part of deploying an existing SIF:
+
+```bash
+Installer/Remote_Sensor_Node/deploy_remote_sensor_node.py \
+  fissure@192.0.2.20 --deploy -i ~/.ssh/fissure-node \
+  --hardware=uhd --hiprfisr-address=192.0.2.10
+```
+
+| Selection | Existing installer setup reused |
+| --- | --- |
+| `uhd` | UHD tools, USB rules, user permissions, and FPGA images; includes B2xx support |
+| `usrp-x300` | UHD preparation plus X300/X310 socket-buffer tuning |
+| `hackrf` | HackRF packages and FISSURE udev rules |
+| `rtlsdr` | RTL-SDR USB access and DVB driver blacklist |
+| `wifi` | The existing rtl8812au DKMS driver recipe and running-kernel headers |
+| `meshtastic` | Meshtastic Python support and serial-device access |
+| `none` | Apptainer only; also the default |
+
+Selections are comma-separated and never prompt again. UHD is prepared once
+when both `uhd` and `usrp-x300` are selected. Required package, firmware, and
+driver failures stop preparation; a disconnected radio can be reported as a
+diagnostic without failing installation. Reconnect or reboot notices require
+operator action; preparation does not reboot the host. The existing X300 buffer
+adjustment applies to the running kernel and must be reapplied after reboot.
+
+For an already prepared host, deploy with `--skip-host-prep` to check existing
+prerequisites without installing packages or configuring hardware. It cannot
+be combined with hardware selections or a support bundle. Maintenance actions
+such as `--restart` and `--sync-source` never prepare hardware.
+`--no-install-apptainer` prohibits Apptainer installation from either source,
+while allowing explicitly selected online hardware preparation.
+
+The same host preparation can run directly on a machine, without SSH:
+
+```bash
+Installer/Host/prepare_host.sh --hardware=uhd --user=fissure
+```
+
+This requires a pre-existing target account and invokes sudo when needed.
+The existing local `Installer/install_apptainer.sh` also accepts
+`--hardware=uhd,hackrf` or `--hardware=none` to override its hardware defaults.
+Its other legacy defaults, including optional services and image building,
+remain in effect.
+
+### Offline Apptainer support
+
+On a connected Ubuntu 24.04 machine or VM with the **same architecture** as the
+target, prepare a new bundle directory:
+
+```bash
+Installer/Host/prepare_support_bundle.sh --output=/path/to/new-host-support
+```
+
+The producer needs `apt-get`, `curl`, `gpg`, `dpkg-deb`, `dpkg-scanpackages`
+(from `dpkg-dev`), and the Ubuntu archive keyring. It uses isolated package
+indexes and an empty package-status database so dependencies already installed
+on the producer are still included. It does not install Apptainer on the
+producer or change its configured APT sources. Existing output directories are
+never replaced.
+
+Transfer and consume the bundle over the management connection:
+
+```bash
+Installer/Remote_Sensor_Node/deploy_remote_sensor_node.py \
+  fissure@192.0.2.20 --prepare-host -i ~/.ssh/fissure-node \
+  --host-support=/path/to/new-host-support
+```
+
+Use the same `--host-support` option with `--deploy` and an existing, matching
+SIF to prepare and deploy in one operation. The bundle and SIF remain separate
+files. The target needs working SSH, Bash, APT/dpkg, systemd, and udev, as on a
+normal Ubuntu installation. No Dashboard or HIPRFISR needs to be running.
+
+`--host-support` implies `--offline`. Without a bundle, `--offline` requires
+compatible Apptainer support to be present already. Offline mode has no
+internet fallback. OS/architecture mismatch, corruption, missing packages, or
+unsupported selections fail explicitly. V1 supports Ubuntu 24.04 `amd64` and
+`arm64`; offline radio selections other than `none` are rejected. Offline SIF
+building and cross-architecture bundle production are not included.
+
+The producer verifies signed Ubuntu and Apptainer package indexes. Bundle
+checksums detect transfer corruption; the consumer trusts the operator-supplied
+bundle. It configures a temporary, local-file-only APT source without inheriting
+host repositories or APT hooks, simulates dependency resolution, fills a private
+cache from that source, and installs with downloading disabled.
+
+See [implementation boundaries and the verification checklist](../../docs/REMOTE_HOST_PREPARATION.md)
+for completed checks and the remaining Ubuntu/ARM validation work.
+
 ## Mutable runtime state
 
 The SIF supplies runtime dependencies and the initial application source. Data
@@ -224,7 +327,11 @@ The default remote installation root is `/opt/fissure-sensor-node`.
 
 | File | Purpose |
 | --- | --- |
-| `deploy_remote_sensor_node.py` | CLI entrypoint and deployment orchestration |
+| `deploy_remote_sensor_node.py` | CLI entrypoint and error reporting |
+| `remote_sensor_node_actions.py` | Build, deployment, and maintenance orchestration |
+| `remote_sensor_node_host.py` | Transfer installer assets and invoke host preparation |
+| `remote_sensor_node_ssh.py` | SSH connection and read-only maintenance preflight |
+| `remote_sensor_node_stream.py` | Bounded output streaming and process supervision |
 | `remote_sensor_node_config.py` | Remote configuration staging |
 | `remote_sensor_node_archive.py` | Filtered directory archives for synchronization |
 | `remote_sensor_node_deploy_utilities.py` | Remote lifecycle shell scripts |
@@ -234,7 +341,7 @@ The default remote installation root is `/opt/fissure-sensor-node`.
 | `remote_sensor_node_options.py` | CLI option parsing, models, and validation |
 | `remote_sensor_node_plugin_sync.py` | Plugin archive and synchronization |
 | `remote_sensor_node_source_sync.py` | Source archive and synchronization |
-| `remote_sensor_node_privilege.py` | Remote sudo and package preparation |
+| `remote_sensor_node_privilege.py` | Remote account inspection and privilege acquisition |
 | `remote_sensor_node_health.py` | Startup and optional heartbeat diagnostics |
 | `remote_sensor_node_scp.py` | Interactive and log-friendly SCP progress |
 | `remote_sensor_node_templates.py` | Strict Jinja2 rendering boundary |
