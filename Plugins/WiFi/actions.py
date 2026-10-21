@@ -39,91 +39,35 @@ _COMMON_WIFI_PARAMS = [
 ]
 
 
-def _to_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-
-    text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if text in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    return default
-
-
-def _default_source_id(
-    component: SensorNode,
-    node_uid: str = "",
-) -> str:
-    return (
-        str(node_uid or "").strip()
-        or str(getattr(component, "uuid", "") or "").strip()
-        or "sensor_node"
-    )
-
-
-def _resolve_wifi_parameters(
-    component: SensorNode,
-    parameters: Dict[str, Any],
-    node_uid: str = "",
-) -> Dict[str, Any]:
-    op_params = dict(parameters or {})
-
-    if not str(op_params.get("wifi_interface", "") or "").strip():
-        op_params["wifi_interface"] = get_default_wifi_interface(
-            getattr(component, "settings_dict", {}) or {}
-        )
-
-    op_params.setdefault("node_uid", node_uid)
-    op_params.setdefault("source_id", _default_source_id(component, node_uid))
-
-    return op_params
-
-
-async def _run_wifi_operation(
-    component: SensorNode,
-    operation_filename: str,
-    parameters: Dict[str, Any],
-    node_uid: str = "",
-) -> None:
-    await component.run_plugin_operation(
-        component,
-        PLUGIN_NAME,
-        operation_filename,
-        {"parameters": parameters},
-        node_uid,
-    )
-
-
 wifi_discovery_edge_light_schema = {
     "params": _COMMON_WIFI_PARAMS + [
         {
-            "name": "lna_gain_db",
-            "label": "LNA Gain (dB)",
+            "name": "scan_interval_s",
+            "label": "Scan Refresh Interval (s)",
             "type": "number",
-            "default": 20,
+            "default": 0.5,
         },
         {
-            "name": "channel_hop_s",
-            "label": "Channel Hop Interval (s)",
+            "name": "reemit_interval_s",
+            "label": "BSSID Re-emit Interval (s, 0=Off)",
             "type": "number",
-            "default": 1.0,
+            "default": 0.0,
         },
         {
-            "name": "alert_on_new_target",
-            "label": "Alert on New Target",
+            "name": "max_emit_rate_hz",
+            "label": "Max Detection Rate (Hz)",
+            "type": "number",
+            "default": 5.0,
+        },
+        {
+            "name": "alert_on_new_detection",
+            "label": "Alert on New BSSID",
             "type": "string",
-            "default": "true",
+            "default": "false",
             "options": ["true", "false"],
         },
     ]
 }
-
-
 async def wifi_discovery_edge_light(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -133,20 +77,18 @@ async def wifi_discovery_edge_light(
         f"WiFi light discovery action with parameters: {parameters}"
     )
 
-    op_params = _resolve_wifi_parameters(component, parameters, node_uid)
-    op_params["alert_on_new_target"] = _to_bool(
-        op_params.get("alert_on_new_target"),
-        default=True,
-    )
+    op_params = dict(parameters or {})
 
-    component.logger.info(
-        f"Resolved WiFi light discovery parameters: {op_params}"
-    )
+    if not str(op_params.get("wifi_interface") or "").strip():
+        op_params["wifi_interface"] = get_default_wifi_interface(
+            getattr(component, "settings_dict", {}) or {}
+        )
 
-    await _run_wifi_operation(
+    await component.run_plugin_operation(
         component,
+        PLUGIN_NAME,
         "wifi_discovery_edge_light.py",
-        op_params,
+        {"parameters": op_params},
         node_uid,
     )
 
@@ -155,27 +97,38 @@ wifi_discovery_edge_oui_schema = {
     "params": _COMMON_WIFI_PARAMS + [
         {
             "name": "oui_filter",
-            "label": "OUI Filter",
+            "label": "Wi-Fi Filter",
             "type": "string",
             "default": "00:11:22",
         },
         {
-            "name": "alert_on_new_target",
-            "label": "Alert on New Target",
+            "name": "scan_interval_s",
+            "label": "Scan Refresh Interval (s)",
+            "type": "number",
+            "default": 0.5,
+        },
+        {
+            "name": "reemit_interval_s",
+            "label": "BSSID Re-emit Interval (s)",
+            "type": "number",
+            "default": 15.0,
+        },
+        {
+            "name": "auto_create_targets",
+            "label": "Auto-create Matching Targets",
             "type": "string",
-            "default": "true",
+            "default": "false",
             "options": ["true", "false"],
         },
         {
-            "name": "channel_hop_s",
-            "label": "Channel Hop Interval (s)",
-            "type": "number",
-            "default": 1.0,
+            "name": "alert_on_new_detection",
+            "label": "Alert on New Match",
+            "type": "string",
+            "default": "false",
+            "options": ["true", "false"],
         },
     ]
 }
-
-
 async def wifi_discovery_edge_oui(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -185,20 +138,18 @@ async def wifi_discovery_edge_oui(
         f"WiFi OUI discovery action with parameters: {parameters}"
     )
 
-    op_params = _resolve_wifi_parameters(component, parameters, node_uid)
-    op_params["alert_on_new_target"] = _to_bool(
-        op_params.get("alert_on_new_target"),
-        default=True,
-    )
+    op_params = dict(parameters or {})
 
-    component.logger.info(
-        f"Resolved WiFi OUI discovery parameters: {op_params}"
-    )
+    if not str(op_params.get("wifi_interface") or "").strip():
+        op_params["wifi_interface"] = get_default_wifi_interface(
+            getattr(component, "settings_dict", {}) or {}
+        )
 
-    await _run_wifi_operation(
+    await component.run_plugin_operation(
         component,
+        PLUGIN_NAME,
         "wifi_discovery_edge_oui.py",
-        op_params,
+        {"parameters": op_params},
         node_uid,
     )
 
@@ -206,63 +157,77 @@ async def wifi_discovery_edge_oui(
 wifi_discovery_edge_logger_schema = {
     "params": _COMMON_WIFI_PARAMS + [
         {
-            "name": "batch_unique_devices",
-            "label": "Batch Unique Devices",
+            "name": "scan_interval_s",
+            "label": "Scan Refresh Interval (s)",
             "type": "number",
-            "default": 500,
+            "default": 0.5,
         },
         {
-            "name": "min_log_interval_s",
-            "label": "Min Log Interval (s)",
+            "name": "observation_max_gap_s",
+            "label": "Max Observation Gap (s)",
             "type": "number",
-            "default": 5.0,
+            "default": 10.0,
+        },
+        {
+            "name": "observation_distance_m",
+            "label": "Observation Distance (m)",
+            "type": "number",
+            "default": 20.0,
+        },
+        {
+            "name": "observation_rssi_change_db",
+            "label": "RSSI Change Threshold (dB)",
+            "type": "number",
+            "default": 8.0,
+        },
+        {
+            "name": "artifact_rollover_mb",
+            "label": "Artifact Rollover (MB, 0=Off)",
+            "type": "number",
+            "default": 250.0,
         },
         {
             "name": "alert_every_unique",
-            "label": "Alert Every Unique Devices",
+            "label": "Summary Alert Every Unique BSSIDs (0=Off)",
             "type": "number",
-            "default": 100,
+            "default": 0,
         },
         {
-            "name": "create_artifacts",
-            "label": "Create Artifacts",
+            "name": "alert_on_artifact",
+            "label": "Alert When Artifact Saved",
             "type": "string",
-            "default": "true",
+            "default": "false",
             "options": ["true", "false"],
         },
         {
             "name": "artifact_name_prefix",
             "label": "Artifact Name Prefix",
             "type": "string",
-            "default": "Wi-Fi Urban Logger Batch",
+            "default": "Wi-Fi Wardrive",
         },
     ]
 }
-
-
 async def wifi_discovery_edge_logger(
     component: SensorNode,
     parameters: Dict[str, Any],
     node_uid: str = "",
 ) -> None:
     component.logger.info(
-        f"WiFi urban logger action with parameters: {parameters}"
+        f"WiFi wardrive logger action with parameters: {parameters}"
     )
 
-    op_params = _resolve_wifi_parameters(component, parameters, node_uid)
-    op_params["create_artifacts"] = _to_bool(
-        op_params.get("create_artifacts"),
-        default=True,
-    )
+    op_params = dict(parameters or {})
 
-    component.logger.info(
-        f"Resolved WiFi urban logger parameters: {op_params}"
-    )
+    if not str(op_params.get("wifi_interface") or "").strip():
+        op_params["wifi_interface"] = get_default_wifi_interface(
+            getattr(component, "settings_dict", {}) or {}
+        )
 
-    await _run_wifi_operation(
+    await component.run_plugin_operation(
         component,
+        PLUGIN_NAME,
         "wifi_discovery_edge_logger.py",
-        op_params,
+        {"parameters": op_params},
         node_uid,
     )
 
@@ -276,28 +241,25 @@ wifi_geolocate_target_schema = {
             "default": "",
         },
         {
-            "name": "emit_every_s",
-            "label": "Emit Interval (s)",
+            "name": "measurement_spacing_m",
+            "label": "Measurement Spacing (m)",
             "type": "number",
-            "default": 1.0,
+            "default": 20.0,
         },
         {
             "name": "meas_every_s",
-            "label": "Measurement Interval (s)",
+            "label": "Scan Refresh Interval (s)",
             "type": "number",
             "default": 0.2,
         },
         {
-            "name": "search_similar_targets",
-            "label": "Search Similar Targets",
-            "type": "string",
-            "default": "false",
-            "options": ["true", "false"],
+            "name": "aggregation_window_s",
+            "label": "RSSI Median Window (s)",
+            "type": "number",
+            "default": 3.0,
         },
     ]
 }
-
-
 async def wifi_geolocate_target(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -307,20 +269,18 @@ async def wifi_geolocate_target(
         f"WiFi target geolocation action with parameters: {parameters}"
     )
 
-    op_params = _resolve_wifi_parameters(component, parameters, node_uid)
-    op_params["search_similar_targets"] = _to_bool(
-        op_params.get("search_similar_targets"),
-        default=False,
-    )
+    op_params = dict(parameters or {})
 
-    component.logger.info(
-        f"Resolved WiFi target geolocation parameters: {op_params}"
-    )
+    if not str(op_params.get("wifi_interface") or "").strip():
+        op_params["wifi_interface"] = get_default_wifi_interface(
+            getattr(component, "settings_dict", {}) or {}
+        )
 
-    await _run_wifi_operation(
+    await component.run_plugin_operation(
         component,
+        PLUGIN_NAME,
         "wifi_geolocate_target.py",
-        op_params,
+        {"parameters": op_params},
         node_uid,
     )
 
@@ -328,34 +288,31 @@ async def wifi_geolocate_target(
 wifi_geolocate_all_schema = {
     "params": _COMMON_WIFI_PARAMS + [
         {
-            "name": "target_ids",
-            "label": "Target IDs",
-            "type": "string",
-            "default": "",
+            "name": "max_targets",
+            "label": "Max Auto-created Targets (0 = unlimited)",
+            "type": "number",
+            "default": 25,
         },
         {
-            "name": "emit_every_s",
-            "label": "Emit Interval (s)",
+            "name": "measurement_spacing_m",
+            "label": "Measurement Spacing (m)",
             "type": "number",
-            "default": 1.0,
+            "default": 20.0,
         },
         {
             "name": "meas_every_s",
-            "label": "Measurement Interval (s)",
+            "label": "Scan Refresh Interval (s)",
             "type": "number",
-            "default": 0.2,
+            "default": 0.5,
         },
         {
-            "name": "search_similar_targets",
-            "label": "Search Similar Targets",
-            "type": "string",
-            "default": "true",
-            "options": ["true", "false"],
+            "name": "aggregation_window_s",
+            "label": "RSSI Median Window (s)",
+            "type": "number",
+            "default": 3.0,
         },
     ]
 }
-
-
 async def wifi_geolocate_all(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -365,19 +322,17 @@ async def wifi_geolocate_all(
         f"WiFi geolocate all action with parameters: {parameters}"
     )
 
-    op_params = _resolve_wifi_parameters(component, parameters, node_uid)
-    op_params["search_similar_targets"] = _to_bool(
-        op_params.get("search_similar_targets"),
-        default=True,
-    )
+    op_params = dict(parameters or {})
 
-    component.logger.info(
-        f"Resolved WiFi geolocate all parameters: {op_params}"
-    )
+    if not str(op_params.get("wifi_interface") or "").strip():
+        op_params["wifi_interface"] = get_default_wifi_interface(
+            getattr(component, "settings_dict", {}) or {}
+        )
 
-    await _run_wifi_operation(
+    await component.run_plugin_operation(
         component,
+        PLUGIN_NAME,
         "wifi_geolocate_all.py",
-        op_params,
+        {"parameters": op_params},
         node_uid,
     )

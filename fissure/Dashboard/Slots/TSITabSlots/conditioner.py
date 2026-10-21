@@ -20,60 +20,34 @@ from fissure.utils.selected_node_utils import (
     selected_node_is_remote,
 )
 from .legacy import _safe_float, _safe_int
+from .sois import _sa_sois_display_name, _sa_sois_value
+from fissure.Dashboard.SoiEvidenceController import collect_soi_artifact_ids
 
-
-TSI_CONDITIONER_METHOD_CATEGORIES = [
-    ("energy", "Energy"),
-    ("eigenvalue", "Eigenvalue"),
-    ("matched_filter", "Matched Filter"),
-    ("cyclostationary", "Cyclostationary"),
-    ("imagery", "Imagery"),
-]
-
-TSI_CONDITIONER_METHODS_BY_CATEGORY = {
-    "energy": [
-        ("burst_tagger", "Burst Tagger"),
-        ("normal", "Normal"),
-        ("normal_decay", "Normal Decay"),
-        ("power_squelch", "Power Squelch"),
-        ("lowpass", "Lowpass"),
-        ("power_squelch_lowpass", "Power Squelch then Lowpass"),
-        ("bandpass", "Bandpass"),
-        ("strongest_frequency_bandpass", "Strongest Frequency then Bandpass"),
-    ],
-    "eigenvalue": [
-        ("placeholder", "Placeholder"),
-    ],
-    "matched_filter": [
-        ("placeholder", "Placeholder"),
-    ],
-    "cyclostationary": [
-        ("placeholder", "Placeholder"),
-    ],
-    "imagery": [
-        ("placeholder", "Placeholder"),
-    ],
-}
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputSourceChanged(dashboard: QtCore.QObject):
-    """
-    Handles Conditioner input source switching.
-
-    Changing source changes the valid action-query context, so existing
-    actions/parameters are cleared. Actions are not queried automatically.
-    """
+    """Switch Conditioner source and rebuild only that source's input list."""
     source = _tsi_conditioner_current_source(dashboard)
 
-    if source in ["File", "Folder"]:
+    if source in ["File", "Folder", "Artifact"]:
         dashboard.ui.stackedWidget_tsi_conditioner_input.setCurrentIndex(0)
-
     elif source == "Frequencies":
         dashboard.ui.stackedWidget_tsi_conditioner_input.setCurrentIndex(1)
+
+    _tsi_conditioner_update_input_source_controls(dashboard)
+
+    if source == "Artifact":
+        refresh_tsi_conditioner_input_artifacts(dashboard)
+    elif source in ["File", "Folder"]:
+        _tsi_conditioner_refresh_file_list_from_path(dashboard)
+    else:
+        dashboard.ui.listWidget_tsi_conditioner_input_files.clear()
+        _tsi_conditioner_apply_soi_frequency_prefill(dashboard)
 
     update_tsi_conditioner_method_hardware_combo(dashboard)
     clear_tsi_conditioner_method_actions(dashboard)
     update_tsi_conditioner_file_gate(dashboard)
+
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputSelectionChanged(dashboard: QtCore.QObject):
@@ -86,6 +60,7 @@ def _slotTSI_ConditionerInputSelectionChanged(dashboard: QtCore.QObject):
         dashboard.tsi_conditioner_selected_file_path = filepath
 
     update_tsi_conditioner_file_gate(dashboard)
+
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputPathEdited(dashboard: QtCore.QObject):
@@ -107,6 +82,7 @@ def _slotTSI_ConditionerInputPathEdited(dashboard: QtCore.QObject):
 
     update_tsi_conditioner_file_gate(dashboard)
 
+
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputDataTypeChanged(dashboard: QtCore.QObject):
     """
@@ -114,21 +90,28 @@ def _slotTSI_ConditionerInputDataTypeChanged(dashboard: QtCore.QObject):
     """
     update_tsi_conditioner_file_gate(dashboard)
 
+
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputExtensionsAllClicked(dashboard: QtCore.QObject):
-    """
-    Shows all files and refreshes immediately.
-    """
+    """Show all compatible local or managed IQ files."""
     dashboard.ui.textEdit_tsi_conditioner_input_extensions.setEnabled(False)
-    _tsi_conditioner_refresh_file_list_from_path(dashboard)
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        _tsi_conditioner_render_selected_artifact_files(dashboard)
+    else:
+        _tsi_conditioner_refresh_file_list_from_path(dashboard)
+
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputExtensionsCustomClicked(dashboard: QtCore.QObject):
-    """
-    Enables custom extension filtering and refreshes immediately.
-    """
+    """Apply a custom extension filter to local or managed IQ files."""
     dashboard.ui.textEdit_tsi_conditioner_input_extensions.setEnabled(True)
-    _tsi_conditioner_refresh_file_list_from_path(dashboard)
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        _tsi_conditioner_render_selected_artifact_files(dashboard)
+    else:
+        _tsi_conditioner_refresh_file_list_from_path(dashboard)
+
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputFolderClicked(dashboard: QtCore.QObject):
@@ -159,12 +142,41 @@ def _slotTSI_ConditionerInputFolderClicked(dashboard: QtCore.QObject):
     _tsi_conditioner_set_input_folder(dashboard, selected_dir)
     _tsi_conditioner_refresh_file_list_from_path(dashboard)
 
-@QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_ConditionerInputRefreshClicked(dashboard: QtCore.QObject):
-    """
-    Refreshes the Conditioner input file list from the selected folder.
-    """
-    _tsi_conditioner_refresh_file_list_from_path(dashboard)
+
+@qasync.asyncSlot(QtCore.QObject)
+async def _slotTSI_ConditionerInputRefreshClicked(dashboard: QtCore.QObject):
+    """Refresh local files or request current managed Artifact metadata."""
+    if _tsi_conditioner_current_source(dashboard) != "Artifact":
+        _tsi_conditioner_refresh_file_list_from_path(dashboard)
+        return
+
+    node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+
+    if not node_uid:
+        dashboard.logger.warning(
+            "[Conditioner] Select a Sensor Node before refreshing Artifacts."
+        )
+        return
+
+    button = getattr(
+        dashboard.ui,
+        "pushButton_tsi_conditioner_input_refresh",
+        None,
+    )
+
+    if button is not None:
+        button.setEnabled(False)
+
+    try:
+        await dashboard.backend.tacticalNodeArtifactsRefresh(node_uid)
+    except Exception as error:
+        dashboard.logger.error(
+            f"[Conditioner] Failed requesting Artifact refresh: {error}"
+        )
+    finally:
+        if button is not None:
+            button.setEnabled(True)
+
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerInputPreviewClicked(dashboard: QtCore.QObject):
@@ -606,6 +618,7 @@ def _tsi_conditioner_file_bytes_per_iq_sample(data_type: str):
 
     return bytes_per_sample.get(data_type)
 
+
 def _tsi_conditioner_format_file_size(num_bytes: int) -> str:
     if num_bytes < 1024:
         return f"{num_bytes} B"
@@ -615,11 +628,664 @@ def _tsi_conditioner_format_file_size(num_bytes: int) -> str:
         return f"{num_bytes / (1024 * 1024):.2f} MB"
     return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
 
+
 def _tsi_conditioner_current_source(dashboard: QtCore.QObject) -> str:
     combo = _tsi_conditioner_widget(dashboard, "comboBox_tsi_conditioner_input_source")
     if combo is None:
         return ""
     return combo.currentText().strip()
+
+
+def _tsi_conditioner_soi_text(soi: dict) -> str:
+    """Build compact Conditioner SOI context text."""
+    name = _sa_sois_display_name(soi)
+    frequency = _sa_sois_value(
+        soi,
+        "frequency_mhz",
+        "center_frequency_mhz",
+    )
+
+    try:
+        frequency_text = f"{float(frequency):.3f} MHz"
+    except Exception:
+        frequency_text = str(frequency or "").strip()
+
+    if frequency_text and frequency_text not in name:
+        return f"{name} ({frequency_text})"
+
+    return name
+
+
+def _tsi_conditioner_selected_soi_context(dashboard: QtCore.QObject) -> dict:
+    """Return the currently selected optional SOI context."""
+    combo = getattr(
+        dashboard.ui,
+        "comboBox_tsi_conditioner_input_soi",
+        None,
+    )
+
+    if combo is None:
+        return {}
+
+    context = combo.currentData(QtCore.Qt.UserRole)
+
+    if not isinstance(context, dict):
+        return {}
+
+    selected_node_uid = str(
+        getattr(dashboard, "selected_node_uid", "")
+        or ""
+    ).strip()
+
+    context_node_uid = str(
+        context.get("node_uid", "")
+        or ""
+    ).strip()
+
+    if (
+        selected_node_uid
+        and context_node_uid
+        and context_node_uid != selected_node_uid
+    ):
+        return {}
+
+    return dict(context)
+
+
+def request_tsi_conditioner_sois_refresh(dashboard: QtCore.QObject):
+    """Request the authoritative SOI list without blocking the Qt slot."""
+    try:
+        asyncio.ensure_future(dashboard.backend.signalAnalysisSoisRefresh())
+    except Exception as error:
+        dashboard.logger.debug(f"[Conditioner] Could not request SOI refresh: {error}")
+
+
+def refresh_tsi_conditioner_soi_context(dashboard: QtCore.QObject, preferred_soi_key: str = ""):
+    """Refresh optional SOI context, newest SOI first."""
+    combo = getattr(dashboard.ui, "comboBox_tsi_conditioner_input_soi", None)
+    if combo is None:
+        return
+
+    current = combo.currentData(QtCore.Qt.UserRole)
+    current_key = str(current.get("soi_key") or "").strip() if isinstance(current, dict) else ""
+    pending_key = str(getattr(dashboard, "signal_analysis_prefill_soi_key", "") or "").strip()
+    preferred_key = str(preferred_soi_key or pending_key or current_key or "").strip()
+    node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    rows = []
+
+    for soi_key, record in (getattr(dashboard, "tactical_sois", {}) or {}).items():
+        if not isinstance(record, dict):
+            continue
+
+        record_node_uid = str(record.get("node_uid") or "").strip()
+        if node_uid and record_node_uid and record_node_uid != node_uid:
+            continue
+
+        soi_id = str(record.get("soi_id") or "").strip()
+        if not soi_id:
+            continue
+
+        context = {
+            "soi_key": str(record.get("soi_key") or soi_key or "").strip(),
+            "soi_id": soi_id,
+            "node_uid": record_node_uid,
+            "frequency_mhz": _sa_sois_value(record, "frequency_mhz", "center_frequency_mhz"),
+            "record": dict(record),
+        }
+        sort_time = str(record.get("observation_time") or record.get("created_at") or record.get("time") or record.get("last_seen") or "").strip()
+        rows.append((sort_time, _tsi_conditioner_soi_text(record), context))
+
+    rows.sort(key=lambda row: row[0], reverse=True)
+
+    combo.blockSignals(True)
+    combo.clear()
+    combo.addItem("Manual / No SOI", None)
+
+    selected_index = 0
+    for _sort_time, display_text, context in rows:
+        combo.addItem(display_text, context)
+        if preferred_key and context["soi_key"] == preferred_key:
+            selected_index = combo.count() - 1
+
+    combo.setCurrentIndex(selected_index)
+    combo.blockSignals(False)
+
+    if pending_key and selected_index > 0:
+        dashboard.signal_analysis_prefill_soi_key = None
+
+    _tsi_conditioner_update_soi_result_button(dashboard)
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        refresh_tsi_conditioner_input_artifacts(dashboard)
+
+
+def _tsi_conditioner_apply_soi_frequency_prefill(
+    dashboard: QtCore.QObject,
+):
+    """Prefill an empty Frequencies plan from the selected SOI."""
+    if _tsi_conditioner_current_source(dashboard) != "Frequencies":
+        return
+
+    context = _tsi_conditioner_selected_soi_context(dashboard)
+
+    if not context:
+        return
+
+    table = _tsi_conditioner_frequency_table(dashboard)
+
+    if table is None or table.rowCount() > 0:
+        return
+
+    frequency_mhz = context.get("frequency_mhz")
+
+    if frequency_mhz in [None, "", "None"]:
+        return
+
+    _tsi_conditioner_add_frequency_row(
+        dashboard,
+        frequency_mhz=frequency_mhz,
+        dwell_s=_tsi_conditioner_frequency_default_dwell(dashboard),
+        select_row=True,
+    )
+
+
+def _tsi_conditioner_update_soi_result_button(
+    dashboard: QtCore.QObject,
+):
+    """Reflect whether Conditioner results will create or update an SOI."""
+    button = getattr(
+        dashboard.ui,
+        "pushButton_tsi_conditioner_results_promote_to_soi",
+        None,
+    )
+
+    if button is None:
+        return
+
+    button.setText(
+        "Save to SOI"
+        if _tsi_conditioner_selected_soi_context(dashboard)
+        else "Create SOI"
+    )
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
+def _slotTSI_ConditionerInputSOIChanged(dashboard: QtCore.QObject):
+    """Apply SOI context and refresh any dependent Artifact choices."""
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        refresh_tsi_conditioner_input_artifacts(dashboard)
+    else:
+        _tsi_conditioner_apply_soi_frequency_prefill(dashboard)
+
+    _tsi_conditioner_update_soi_result_button(dashboard)
+
+
+def _tsi_conditioner_artifact_id(artifact_key, record: dict) -> str:
+    return str(
+        record.get("artifact_id")
+        or record.get("id")
+        or artifact_key
+        or ""
+    ).strip()
+
+
+def _tsi_conditioner_artifact_node_uid(record: dict) -> str:
+    return str(
+        record.get("node_uid")
+        or record.get("source_id")
+        or ""
+    ).strip()
+
+
+def _tsi_conditioner_artifact_file_is_iq(file_record: dict) -> bool:
+    """Return True for directly registered IQ Artifact members."""
+    if not isinstance(file_record, dict):
+        return False
+
+    metadata = file_record.get("metadata", {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    role = str(file_record.get("role") or metadata.get("role") or "").strip().lower()
+
+    if role in {"iq_data", "sigmf_data", "iq_burst", "source_iq", "source_iq_v1"}:
+        return True
+    if role in {"bundle", "sigmf_metadata", "operation_metadata", "feature_report", "classification"}:
+        return False
+
+    name = str(file_record.get("name") or file_record.get("relative_path") or file_record.get("path") or "").strip().lower()
+    return name.endswith((".iq", ".dat", ".bin", ".raw", ".sigmf-data"))
+
+
+def _tsi_conditioner_artifact_display_text(
+    artifact_id: str,
+    record: dict,
+) -> str:
+    name = str(
+        record.get("name")
+        or record.get("description")
+        or "Artifact"
+    ).strip()
+
+    created = str(
+        record.get("modified_at")
+        or record.get("created_at")
+        or ""
+    ).strip()
+
+    text = f"{name} | {artifact_id}"
+
+    if created:
+        text += f" | {created}"
+
+    return text
+
+
+def refresh_tsi_conditioner_input_artifacts(dashboard: QtCore.QObject):
+    """Show node Artifacts, filtered to the selected SOI when one is selected."""
+    combo = getattr(dashboard.ui, "comboBox_tsi_conditioner_input_artifact", None)
+    if combo is None:
+        return
+
+    previous = combo.currentData(QtCore.Qt.UserRole)
+    previous_id = str(previous.get("artifact_id") or "").strip() if isinstance(previous, dict) else ""
+    node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    soi_context = _tsi_conditioner_selected_soi_context(dashboard)
+    linked_ids = set(collect_soi_artifact_ids(soi_context.get("record", {}))) if soi_context else set()
+    artifacts = getattr(dashboard, "tactical_artifacts", {}) or {}
+
+    if isinstance(artifacts, dict):
+        iterable = artifacts.items()
+    elif isinstance(artifacts, list):
+        iterable = enumerate(artifacts)
+    else:
+        iterable = []
+
+    rows = []
+    for artifact_key, record in iterable:
+        if not isinstance(record, dict):
+            continue
+
+        artifact_id = _tsi_conditioner_artifact_id(artifact_key, record)
+        if not artifact_id:
+            continue
+
+        record_node_uid = _tsi_conditioner_artifact_node_uid(record)
+        if node_uid and record_node_uid and record_node_uid != node_uid:
+            continue
+        if soi_context and artifact_id not in linked_ids:
+            continue
+
+        context = {"artifact_id": artifact_id, "node_uid": record_node_uid, "record": dict(record)}
+        rows.append((_tsi_conditioner_artifact_display_text(artifact_id, record), context))
+
+    rows.sort(key=lambda row: row[0].lower())
+
+    combo.blockSignals(True)
+    combo.clear()
+    combo.addItem("Select Artifact...", None)
+
+    selected_index = 0
+    for display_text, context in rows:
+        combo.addItem(display_text, context)
+        if previous_id and context["artifact_id"] == previous_id:
+            selected_index = combo.count() - 1
+
+    if len(rows) == 1:
+        selected_index = 1
+
+    combo.setCurrentIndex(selected_index)
+    combo.blockSignals(False)
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        _slotTSI_ConditionerInputArtifactChanged(dashboard)
+
+
+def _tsi_conditioner_artifact_local_paths(
+    dashboard: QtCore.QObject,
+    artifact_id: str,
+) -> dict:
+    try:
+        return (
+            dashboard.backend.artifact_transfer_controller
+            .get_local_files(artifact_id)
+        ) or {}
+    except Exception:
+        return {}
+
+
+def _tsi_conditioner_artifact_file_records(
+    dashboard: QtCore.QObject,
+    context: dict,
+) -> list:
+    artifact_id = str(
+        context.get("artifact_id", "")
+        or ""
+    ).strip()
+
+    artifact = context.get("record", {})
+
+    if not isinstance(artifact, dict):
+        artifact = {}
+
+    operation_id = str(
+        artifact.get("operation_id", "")
+        or (
+            artifact.get("metadata", {})
+            if isinstance(artifact.get("metadata"), dict)
+            else {}
+        ).get("operation_id", "")
+        or ""
+    ).strip()
+
+    local_files = _tsi_conditioner_artifact_local_paths(
+        dashboard,
+        artifact_id,
+    )
+
+    output = []
+
+    for file_record in artifact.get("files", []) or []:
+        if not _tsi_conditioner_artifact_file_is_iq(file_record):
+            continue
+
+        file_id = str(
+            file_record.get("id", "")
+            or ""
+        ).strip()
+
+        name = str(
+            file_record.get("name", "")
+            or file_record.get("relative_path", "")
+            or ""
+        ).strip()
+
+        if not file_id or not name:
+            continue
+
+        output.append(
+            {
+                "name": name,
+                "file_id": file_id,
+                "artifact_id": artifact_id,
+                "operation_id": operation_id,
+                "role": str(
+                    file_record.get("role", "")
+                    or ""
+                ).strip(),
+                "sha256": str(
+                    file_record.get("sha256", "")
+                    or ""
+                ).strip(),
+                "size_bytes": file_record.get(
+                    "size",
+                    0,
+                ),
+                "path": str(
+                    local_files.get(file_id, "")
+                    or ""
+                ).strip(),
+                "record": dict(file_record),
+            }
+        )
+
+    return output
+
+
+def _tsi_conditioner_artifact_extension_matches(
+    dashboard: QtCore.QObject,
+    record: dict,
+) -> bool:
+    if (
+        dashboard.ui.radioButton_tsi_conditioner_input_extensions_all
+        .isChecked()
+    ):
+        return True
+
+    extension = (
+        dashboard.ui.textEdit_tsi_conditioner_input_extensions
+        .toPlainText()
+        .strip()
+        .lower()
+    )
+
+    if not extension:
+        return False
+
+    return str(
+        record.get("name", "")
+        or ""
+    ).lower().endswith(extension)
+
+
+def _tsi_conditioner_render_selected_artifact_files(dashboard: QtCore.QObject):
+    """Show directly registered compatible IQ members from one Artifact."""
+    context = getattr(dashboard, "tsi_conditioner_selected_input_artifact", {})
+    context = context if isinstance(context, dict) else {}
+    records = _tsi_conditioner_artifact_file_records(dashboard, context)
+    list_widget = dashboard.ui.listWidget_tsi_conditioner_input_files
+
+    list_widget.blockSignals(True)
+    list_widget.clear()
+    list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+
+    for record in records:
+        if not _tsi_conditioner_artifact_extension_matches(dashboard, record):
+            continue
+
+        item = QtWidgets.QListWidgetItem(record["name"])
+        item.setData(QtCore.Qt.UserRole, record)
+        item.setToolTip(record.get("path") or f"Artifact {record.get('artifact_id', '')} | {record.get('role', '')}")
+        list_widget.addItem(item)
+        item.setSelected(True)
+
+    if list_widget.count() > 0:
+        list_widget.setCurrentItem(list_widget.item(0), QtCore.QItemSelectionModel.NoUpdate)
+
+    list_widget.blockSignals(False)
+    update_tsi_conditioner_file_gate(dashboard)
+
+
+def _tsi_conditioner_apply_artifact_input_defaults(
+    dashboard: QtCore.QObject,
+    context: dict,
+):
+    """Use Artifact metadata for the Card 1 preview assumptions when available."""
+    record = context.get("record", {})
+
+    if not isinstance(record, dict):
+        return
+
+    metadata = record.get("metadata", {})
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    data_type = str(
+        metadata.get("data_type", "")
+        or ""
+    ).strip()
+
+    if data_type:
+        combo = dashboard.ui.comboBox_tsi_conditioner_input_data_type
+        index = combo.findText(data_type)
+
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    sample_rate = metadata.get("sample_rate")
+
+    try:
+        sample_rate_msps = float(sample_rate) / 1_000_000.0
+    except Exception:
+        sample_rate_msps = 0.0
+
+    if sample_rate_msps > 0:
+        _tsi_conditioner_set_text_edit(
+            dashboard,
+            "textEdit_tsi_conditioner_file_sample_rate",
+            f"{sample_rate_msps:g}",
+        )
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
+def _slotTSI_ConditionerInputArtifactChanged(
+    dashboard: QtCore.QObject,
+):
+    context = (
+        dashboard.ui.comboBox_tsi_conditioner_input_artifact
+        .currentData(QtCore.Qt.UserRole)
+    )
+
+    if not isinstance(context, dict):
+        context = {}
+
+    dashboard.tsi_conditioner_selected_input_artifact = dict(
+        context
+    )
+
+    _tsi_conditioner_apply_artifact_input_defaults(
+        dashboard,
+        context,
+    )
+
+    _tsi_conditioner_render_selected_artifact_files(
+        dashboard
+    )
+
+
+def _tsi_conditioner_selected_artifact_file_records(dashboard: QtCore.QObject) -> list:
+    """Return only the Artifact members selected for batch conditioning."""
+    records = []
+
+    for item in dashboard.ui.listWidget_tsi_conditioner_input_files.selectedItems():
+        record = item.data(QtCore.Qt.UserRole)
+        if not isinstance(record, dict):
+            continue
+
+        file_id = str(record.get("file_id") or "").strip()
+        name = str(record.get("name") or "").strip()
+        artifact_id = str(record.get("artifact_id") or "").strip()
+
+        if file_id and name and artifact_id:
+            records.append({
+                "name": name,
+                "file_id": file_id,
+                "artifact_id": artifact_id,
+                "operation_id": str(record.get("operation_id") or "").strip(),
+                "role": str(record.get("role") or "").strip(),
+                "sha256": str(record.get("sha256") or "").strip(),
+                "size_bytes": record.get("size_bytes"),
+            })
+
+    return records
+
+
+def _tsi_conditioner_collect_managed_artifact_input(
+    dashboard: QtCore.QObject,
+) -> dict:
+    context = getattr(
+        dashboard,
+        "tsi_conditioner_selected_input_artifact",
+        {},
+    )
+
+    if not isinstance(context, dict):
+        context = {}
+
+    artifact_id = str(
+        context.get("artifact_id", "")
+        or ""
+    ).strip()
+
+    artifact = context.get("record", {})
+
+    if not isinstance(artifact, dict):
+        artifact = {}
+
+    operation_id = str(
+        artifact.get("operation_id", "")
+        or (
+            artifact.get("metadata", {})
+            if isinstance(artifact.get("metadata"), dict)
+            else {}
+        ).get("operation_id", "")
+        or ""
+    ).strip()
+
+    selected_files = _tsi_conditioner_selected_artifact_file_records(
+        dashboard
+    )
+
+    if not artifact_id or not selected_files:
+        return {}
+
+    return {
+        "source": "Artifact",
+        "artifact_ids": [artifact_id],
+        "artifacts": [
+            {
+                "artifact_id": artifact_id,
+                "operation_id": operation_id,
+                "selected_files": selected_files,
+            }
+        ],
+    }
+
+
+def _tsi_conditioner_update_input_source_controls(
+    dashboard: QtCore.QObject,
+):
+    """Toggle the shared File/Folder/Artifact page controls."""
+    source = _tsi_conditioner_current_source(dashboard)
+
+    folder_controls = [
+        getattr(dashboard.ui, "label2_tsi_conditioner_input_folder", None),
+        getattr(dashboard.ui, "textEdit_tsi_conditioner_file_path", None),
+        getattr(dashboard.ui, "pushButton_tsi_conditioner_input_folder", None),
+    ]
+
+    artifact_controls = [
+        getattr(dashboard.ui, "label2_tsi_conditioner_input_artifact", None),
+        getattr(dashboard.ui, "comboBox_tsi_conditioner_input_artifact", None),
+    ]
+
+    show_folder = source in ["File", "Folder"]
+    show_artifact = source == "Artifact"
+
+    for widget in folder_controls:
+        if widget is not None:
+            widget.setVisible(show_folder)
+
+    for widget in artifact_controls:
+        if widget is not None:
+            widget.setVisible(show_artifact)
+
+    refresh_button = getattr(
+        dashboard.ui,
+        "pushButton_tsi_conditioner_input_refresh",
+        None,
+    )
+
+    if refresh_button is not None:
+        refresh_button.setVisible(
+            source in ["File", "Folder", "Artifact"]
+        )
+        refresh_button.setToolTip(
+            "Refresh Artifact metadata"
+            if show_artifact
+            else "Refresh file list"
+        )
+
+    list_widget = dashboard.ui.listWidget_tsi_conditioner_input_files
+
+    if source == "Artifact":
+        list_widget.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection
+        )
+    else:
+        list_widget.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+
 
 def _tsi_conditioner_preview_sample_rate_sps(dashboard: QtCore.QObject) -> float:
     """
@@ -684,6 +1350,7 @@ def _tsi_conditioner_update_workflow_ribbon(dashboard: QtCore.QObject):
             "Folder": "Local IQ Folder",
             "Frequencies": "Frequencies",
             "Select Node": "—",
+            "Artifact": "Artifact",
         }
 
         source_label = source_labels.get(source, source or "—")
@@ -817,9 +1484,43 @@ def _tsi_conditioner_update_workflow_ribbon(dashboard: QtCore.QObject):
         promoted_label,
     )
 
+
 def _tsi_conditioner_update_file_tooltip(dashboard: QtCore.QObject):
-    filepath = _tsi_conditioner_selected_input_file(dashboard)
+    """Show useful metadata for the current local or managed input row."""
     list_widget = dashboard.ui.listWidget_tsi_conditioner_input_files
+    item = list_widget.currentItem()
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        if item is None:
+            list_widget.setToolTip("Select an Artifact IQ file.")
+            return
+
+        record = item.data(QtCore.Qt.UserRole)
+
+        if not isinstance(record, dict):
+            list_widget.setToolTip("Select an Artifact IQ file.")
+            return
+
+        size_value = record.get("size_bytes", 0)
+        try:
+            size_text = _tsi_conditioner_format_file_size(int(size_value or 0))
+        except Exception:
+            size_text = str(size_value or "Unknown")
+
+        local_path = _tsi_conditioner_selected_input_file(dashboard)
+
+        tooltip = (
+            f"Artifact: {record.get('artifact_id', '')}\n"
+            f"File: {record.get('name', '')}\n"
+            f"Role: {record.get('role', '') or 'payload'}\n"
+            f"Size: {size_text}\n"
+            f"Dashboard Cache: {local_path or 'Not downloaded'}"
+        )
+
+        list_widget.setToolTip(tooltip)
+        return
+
+    filepath = _tsi_conditioner_selected_input_file(dashboard)
 
     if not filepath or not os.path.isfile(filepath):
         list_widget.setToolTip("No valid local IQ file selected.")
@@ -839,12 +1540,11 @@ def _tsi_conditioner_update_file_tooltip(dashboard: QtCore.QObject):
     sample_rate = _tsi_conditioner_preview_sample_rate_sps(dashboard)
 
     if sample_rate > 0 and sample_count > 0:
-        duration_s = sample_count / sample_rate
-        duration_text = f"{duration_s:.6f} s"
+        duration_text = f"{sample_count / sample_rate:.6f} s"
     else:
         duration_text = "Unknown"
 
-    tooltip = (
+    list_widget.setToolTip(
         f"File: {filepath}\n"
         f"Type: {data_type}\n"
         f"Size: {_tsi_conditioner_format_file_size(byte_count)}\n"
@@ -853,37 +1553,25 @@ def _tsi_conditioner_update_file_tooltip(dashboard: QtCore.QObject):
         f"Estimated Duration: {duration_text}"
     )
 
-    list_widget.setToolTip(tooltip)
 
 def update_tsi_conditioner_file_gate(dashboard: QtCore.QObject):
-    """
-    Updates current first-pass Conditioner gates.
-
-    File / Folder source:
-      - Preview enabled only for local selected node.
-      - Preview enabled only when selected list row resolves to a real file.
-
-    Frequencies source:
-      - Input table editing is allowed when a node is selected.
-      - Hardware/start gating happens in Section 2/3.
-    """
+    """Update preview/readiness state for local, Artifact, and live inputs."""
     source = _tsi_conditioner_current_source(dashboard)
     filepath = _tsi_conditioner_selected_input_file(dashboard)
 
     node_ready = _tsi_conditioner_selected_node_available(dashboard)
-    local_node = _tsi_conditioner_selected_node_is_local(dashboard)
-
-    valid_file = (
+    local_preview = bool(
         node_ready
-        and local_node
-        and source in ["File", "Folder"]
+        and source in ["File", "Folder", "Artifact"]
+        and filepath
         and os.path.isfile(filepath)
     )
 
-    dashboard.ui.pushButton_tsi_conditioner_input_preview.setEnabled(valid_file)
+    dashboard.ui.pushButton_tsi_conditioner_input_preview.setEnabled(local_preview)
 
     _tsi_conditioner_update_file_tooltip(dashboard)
     _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 def _tsi_conditioner_refresh_file_list_from_path(dashboard: QtCore.QObject):
     """
@@ -982,6 +1670,44 @@ def _initialize_tsi_conditioner_preview_canvas(
     )
 
 
+def _tsi_conditioner_clear_session_results(dashboard: QtCore.QObject):
+    """Clear Conditioner result state without deleting any files or Artifacts."""
+    dashboard.tsi_conditioner_running = False
+    dashboard.tsi_conditioner_node_uid = ""
+    dashboard.tsi_conditioner_opid = ""
+    dashboard.tsi_conditioner_waiting_for_opid = False
+    dashboard.tsi_conditioner_last_artifact_id = ""
+    dashboard.tsi_conditioner_last_artifact_payload = {}
+
+    table = getattr(dashboard.ui, "tableWidget_tsi_conditioner_results", None)
+    if table is not None:
+        table.setRowCount(0)
+        table.clearSelection()
+
+    progress = getattr(dashboard.ui, "progressBar_tsi_conditioner_run_progress", None)
+    if progress is not None:
+        progress.setRange(0, 100)
+        progress.setValue(0)
+
+    artifact_label = getattr(dashboard.ui, "label2_tsi_conditioner_run_artifact_id", None)
+    if artifact_label is not None:
+        artifact_label.setText("—")
+        artifact_label.setToolTip("")
+
+    download_button = getattr(dashboard.ui, "pushButton_tsi_conditioner_run_download_artifact", None)
+    if download_button is not None:
+        download_button.setEnabled(False)
+
+    count_label = getattr(dashboard.ui, "label2_tsi_conditioner_results_file_count", None)
+    if count_label is not None:
+        count_label.setText("File Count: 0")
+
+    _tsi_conditioner_set_run_button_state(dashboard, False)
+    _tsi_conditioner_set_run_status(dashboard, "Idle")
+    _tsi_conditioner_update_results_action_gate(dashboard)
+    _tsi_conditioner_update_workflow_ribbon(dashboard)
+
+
 def initialize_tsi_conditioner_controls(
     dashboard: QtCore.QObject,
 ):
@@ -1019,11 +1745,14 @@ def initialize_tsi_conditioner_controls(
     dashboard.tsi_conditioner_method_parameter_widgets = {}
     dashboard.tsi_conditioner_method_current_schema = {}
     dashboard.tsi_conditioner_method_customized = False
+    dashboard.tsi_conditioner_selected_input_artifact = {}
 
     dashboard.tsi_conditioner_last_input_source = ""
     dashboard.tsi_conditioner_action_query_pending = False
     dashboard.tsi_conditioner_action_query_context = ""
     dashboard.tsi_conditioner_action_query_node_uid = ""
+
+    _tsi_conditioner_clear_session_results(dashboard)
 
     dashboard.tsi_conditioner_run_output_folder = getattr(
         dashboard,
@@ -1394,12 +2123,14 @@ def initialize_tsi_conditioner_controls(
         source_combo.addItems([
             "File",
             "Folder",
+            "Artifact",
             "Frequencies",
         ])
 
         if current_source in {
             "File",
             "Folder",
+            "Artifact",
             "Frequencies",
         }:
             source_combo.setCurrentText(
@@ -1412,24 +2143,22 @@ def initialize_tsi_conditioner_controls(
 
         source_combo.blockSignals(False)
 
-    _populate_tsi_conditioner_method_category_combo(
-        dashboard
-    )
-    _populate_tsi_conditioner_method_method_combo(
-        dashboard
-    )
-    update_tsi_conditioner_method_hardware_combo(
-        dashboard
-    )
-    clear_tsi_conditioner_method_actions(
-        dashboard
-    )
+    refresh_tsi_conditioner_soi_context(dashboard)
+    refresh_tsi_conditioner_input_artifacts(dashboard)
+    _tsi_conditioner_update_input_source_controls(dashboard)
+    _tsi_conditioner_update_soi_result_button(dashboard)
+    request_tsi_conditioner_sois_refresh(dashboard)
+
+    _populate_tsi_conditioner_method_category_combo(dashboard)
+    _populate_tsi_conditioner_method_method_combo(dashboard)
+    update_tsi_conditioner_method_hardware_combo(dashboard)
+    clear_tsi_conditioner_method_actions(dashboard)
 
     dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText(
         "Query Actions"
     )
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText(
-        "Query Parameters"
+        "Customize"
     )
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(
         False
@@ -1449,9 +2178,6 @@ def initialize_tsi_conditioner_controls(
         dashboard
     )
     update_tsi_conditioner_selected_node_gate(
-        dashboard
-    )
-    update_tsi_conditioner_run_node_label(
         dashboard
     )
 
@@ -1489,6 +2215,7 @@ def _tsi_conditioner_shorten_path(path: str, max_chars: int = 38) -> str:
 
     return shortened
 
+
 def _tsi_conditioner_set_input_folder(dashboard: QtCore.QObject, folder_path: str):
     """
     Sets the Conditioner input folder.
@@ -1505,6 +2232,7 @@ def _tsi_conditioner_set_input_folder(dashboard: QtCore.QObject, folder_path: st
     text_edit.setPlainText(_tsi_conditioner_shorten_path(folder_path))
     text_edit.setToolTip(folder_path)
     text_edit.blockSignals(old_state)
+
 
 def _tsi_conditioner_get_input_folder(dashboard: QtCore.QObject) -> str:
     """
@@ -1525,26 +2253,58 @@ def _tsi_conditioner_get_input_folder(dashboard: QtCore.QObject) -> str:
 
     return ""
 
+
 def _tsi_conditioner_selected_input_file(dashboard: QtCore.QObject) -> str:
-    """
-    Returns the full path for the currently selected Conditioner input file.
-    """
-    folder_path = _tsi_conditioner_get_input_folder(dashboard)
-
-    if not folder_path:
-        return ""
-
+    """Return the Dashboard-local path for the current preview row, if available."""
     item = dashboard.ui.listWidget_tsi_conditioner_input_files.currentItem()
 
     if item is None:
         return ""
 
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        record = item.data(QtCore.Qt.UserRole)
+
+        if not isinstance(record, dict):
+            return ""
+
+        local_path = str(record.get("path", "") or "").strip()
+
+        if local_path and os.path.isfile(local_path):
+            return local_path
+
+        artifact_id = str(record.get("artifact_id", "") or "").strip()
+        file_id = str(record.get("file_id", "") or "").strip()
+
+        if not artifact_id or not file_id:
+            return ""
+
+        try:
+            local_files = (
+                dashboard.backend.artifact_transfer_controller
+                .get_local_files(artifact_id)
+            )
+        except Exception:
+            local_files = {}
+
+        local_path = str(local_files.get(file_id, "") or "").strip()
+
+        if local_path and os.path.isfile(local_path):
+            record["path"] = local_path
+            item.setData(QtCore.Qt.UserRole, record)
+            item.setToolTip(local_path)
+            return local_path
+
+        return ""
+
+    folder_path = _tsi_conditioner_get_input_folder(dashboard)
+
+    if not folder_path:
+        return ""
+
     filepath = os.path.join(folder_path, item.text())
 
-    if os.path.isfile(filepath):
-        return filepath
+    return filepath if os.path.isfile(filepath) else ""
 
-    return ""
 
 def _tsi_conditioner_set_preview_file_label(dashboard: QtCore.QObject, filepath: str):
     """
@@ -2417,6 +3177,7 @@ def _tsi_conditioner_selected_node_available(dashboard: QtCore.QObject) -> bool:
 
     return True
 
+
 def _tsi_conditioner_selected_node_is_local(dashboard: QtCore.QObject) -> bool:
     """
     Returns True when the selected Sensor Node is local.
@@ -2430,23 +3191,25 @@ def _tsi_conditioner_selected_node_is_local(dashboard: QtCore.QObject) -> bool:
         selected_ip = str(getattr(dashboard, "selected_node_ip", "") or "").strip().lower()
         return selected_ip == "ipc"
 
+
 def _tsi_conditioner_allowed_sources_for_selected_node(dashboard: QtCore.QObject):
-    """
-    Returns the Source Type options allowed by the selected node.
-
-    Local node:
-        File, Folder, Frequencies
-
-    Remote node:
-        Frequencies only
-    """
+    """Return Conditioner sources valid for the selected local/remote node."""
     if not _tsi_conditioner_selected_node_available(dashboard):
         return []
 
     if _tsi_conditioner_selected_node_is_local(dashboard):
-        return ["File", "Folder", "Frequencies"]
+        return [
+            "File",
+            "Folder",
+            "Artifact",
+            "Frequencies",
+        ]
 
-    return ["Frequencies"]
+    return [
+        "Artifact",
+        "Frequencies",
+    ]
+
 
 def _tsi_conditioner_selected_node_label(dashboard: QtCore.QObject) -> str:
     """
@@ -2520,6 +3283,8 @@ def _tsi_conditioner_set_source_page_enabled(
         "comboBox_tsi_conditioner_input_data_type",
         "textEdit_tsi_conditioner_file_sample_rate",
         "pushButton_tsi_conditioner_input_preview",
+        "comboBox_tsi_conditioner_input_artifact",
+        "comboBox_tsi_conditioner_input_soi",
 
         # Frequencies page
         "label2_conditioner_input_frequencies_dwell",
@@ -2539,6 +3304,7 @@ def _tsi_conditioner_set_source_page_enabled(
 
         if widget is not None:
             widget.setEnabled(enabled)
+
 
 def update_tsi_conditioner_selected_node_gate(dashboard: QtCore.QObject):
     """
@@ -2563,8 +3329,6 @@ def update_tsi_conditioner_selected_node_gate(dashboard: QtCore.QObject):
     """
     selected_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
     node_ready = _tsi_conditioner_selected_node_available(dashboard)
-
-    update_tsi_conditioner_run_node_label(dashboard)
 
     gate_stack = getattr(
         dashboard.ui,
@@ -2655,51 +3419,175 @@ def _tsi_conditioner_current_combo_data(combo, fallback=""):
 def _tsi_conditioner_selected_method_category(dashboard: QtCore.QObject) -> str:
     return _tsi_conditioner_current_combo_data(
         dashboard.ui.comboBox_tsi_conditioner_method_category,
-        "iq",
+        "",
     )
 
 def _tsi_conditioner_selected_method(dashboard: QtCore.QObject) -> str:
     return _tsi_conditioner_current_combo_data(
         dashboard.ui.comboBox_tsi_conditioner_method_method,
-        "signal_conditioning",
+        "",
     )
 
+def _tsi_conditioner_action_tags(action_record: dict) -> set:
+    """Return normalized tags for one Conditioner action record."""
+    tags = action_record.get("tags", []) if isinstance(action_record, dict) else []
+
+    if not isinstance(tags, (list, tuple, set)):
+        tags = [tags]
+
+    return {
+        str(tag or "").strip().lower()
+        for tag in tags
+        if str(tag or "").strip()
+    }
+
+def _tsi_conditioner_catalog_tag_values(
+    dashboard: QtCore.QObject,
+    prefix: str,
+    required_tag: str = "",
+):
+    """Return sorted unique tag suffixes from the cached Conditioner catalog."""
+    prefix = str(prefix or "").strip().lower()
+    required_tag = str(required_tag or "").strip().lower()
+    values = []
+
+    for action_record in getattr(dashboard, "tsi_conditioner_method_actions", []) or []:
+        tags = _tsi_conditioner_action_tags(action_record)
+
+        if required_tag and required_tag not in tags:
+            continue
+
+        for tag in tags:
+            if not tag.startswith(prefix):
+                continue
+
+            value = tag[len(prefix):].strip(".")
+            if value and value not in values:
+                values.append(value)
+
+    return sorted(values)
+
+def _tsi_conditioner_tag_label(value: str) -> str:
+    """Build a readable label from a Conditioner tag suffix."""
+    text = str(value or "").strip().replace("_", " ")
+    return text.title() if text else ""
+
 def _populate_tsi_conditioner_method_category_combo(dashboard: QtCore.QObject):
+    """Populate Conditioner categories from the queried plugin action catalog."""
     combo = dashboard.ui.comboBox_tsi_conditioner_method_category
-    current_data = combo.currentData()
+    current_data = str(combo.currentData() or "").strip()
+    categories = _tsi_conditioner_catalog_tag_values(
+        dashboard,
+        "tsi.conditioner.category.",
+    )
 
     combo.blockSignals(True)
     combo.clear()
 
-    for data, text in TSI_CONDITIONER_METHOD_CATEGORIES:
-        combo.addItem(text, data)
+    for category in categories:
+        combo.addItem(_tsi_conditioner_tag_label(category), category)
 
     if current_data:
         index = combo.findData(current_data)
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    combo.setEnabled(bool(categories))
     combo.blockSignals(False)
 
 def _populate_tsi_conditioner_method_method_combo(dashboard: QtCore.QObject):
+    """Populate Conditioner methods from actions in the selected category."""
     category = _tsi_conditioner_selected_method_category(dashboard)
-    methods = TSI_CONDITIONER_METHODS_BY_CATEGORY.get(category, [])
-
     combo = dashboard.ui.comboBox_tsi_conditioner_method_method
-    current_data = combo.currentData()
+    current_data = str(combo.currentData() or "").strip()
+
+    required_tag = (
+        f"tsi.conditioner.category.{category}"
+        if category
+        else ""
+    )
+    methods = _tsi_conditioner_catalog_tag_values(
+        dashboard,
+        "tsi.conditioner.method.",
+        required_tag=required_tag,
+    )
 
     combo.blockSignals(True)
     combo.clear()
 
-    for data, text in methods:
-        combo.addItem(text, data)
+    for method in methods:
+        combo.addItem(_tsi_conditioner_tag_label(method), method)
 
     if current_data:
         index = combo.findData(current_data)
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    combo.setEnabled(bool(methods))
     combo.blockSignals(False)
+
+def _populate_tsi_conditioner_method_action_combo(dashboard: QtCore.QObject):
+    """Filter the cached Conditioner action catalog by Category and Method."""
+    category = _tsi_conditioner_selected_method_category(dashboard)
+    method = _tsi_conditioner_selected_method(dashboard)
+    combo = dashboard.ui.comboBox_tsi_conditioner_method_action
+
+    selected_record = combo.currentData()
+    previous_plugin = ""
+    previous_action = ""
+
+    if isinstance(selected_record, dict):
+        previous_plugin = str(selected_record.get("plugin", "") or "").strip()
+        previous_action = str(selected_record.get("action", "") or "").strip()
+
+    category_tag = f"tsi.conditioner.category.{category}" if category else ""
+    method_tag = f"tsi.conditioner.method.{method}" if method else ""
+
+    records = []
+    for action_record in getattr(dashboard, "tsi_conditioner_method_actions", []) or []:
+        tags = _tsi_conditioner_action_tags(action_record)
+
+        if category_tag and category_tag not in tags:
+            continue
+        if method_tag and method_tag not in tags:
+            continue
+
+        records.append(action_record)
+
+    combo.blockSignals(True)
+    combo.clear()
+
+    restore_index = -1
+    for action_record in records:
+        plugin_name = str(action_record.get("plugin", "") or "").strip()
+        action_name = str(action_record.get("action", "") or "").strip()
+
+        if not plugin_name or not action_name:
+            continue
+
+        combo.addItem(f"{plugin_name}: {action_name}", action_record)
+
+        if plugin_name == previous_plugin and action_name == previous_action:
+            restore_index = combo.count() - 1
+
+    if combo.count() > 0:
+        combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
+    else:
+        combo.setCurrentIndex(-1)
+
+    combo.blockSignals(False)
+    combo.setEnabled(combo.count() > 0)
+
+    if combo.count() > 0:
+        _slotTSI_ConditionerMethodActionChanged(dashboard)
+    else:
+        dashboard.tsi_conditioner_selected_plugin = ""
+        dashboard.tsi_conditioner_selected_action = ""
+        dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(False)
+        clear_tsi_conditioner_method_parameter_controls(dashboard)
+
+    _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 def update_tsi_conditioner_method_hardware_combo(dashboard: QtCore.QObject):
     """
@@ -2756,39 +3644,34 @@ def update_tsi_conditioner_method_hardware_combo(dashboard: QtCore.QObject):
     combo.setEnabled(bool(hardware_names))
     combo.blockSignals(False)
 
-def clear_tsi_conditioner_method_actions(dashboard: QtCore.QObject):
-    """
-    Clears Conditioner action and parameter state.
 
-    This does not query actions. Querying is button-only.
-    """
+def clear_tsi_conditioner_method_actions(dashboard: QtCore.QObject):
+    """Clear the queried Conditioner action catalog and dependent UI state."""
     combo = dashboard.ui.comboBox_tsi_conditioner_method_action
 
     combo.blockSignals(True)
     combo.clear()
     combo.blockSignals(False)
-
     combo.setEnabled(False)
-
-    dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(False)
-    dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText(
-        "Query Parameters"
-    )
-
-    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setEnabled(True)
-    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText(
-        "Query Actions"
-    )
 
     dashboard.tsi_conditioner_method_actions = []
     dashboard.tsi_conditioner_selected_plugin = ""
     dashboard.tsi_conditioner_selected_action = ""
-
     dashboard.tsi_conditioner_action_query_pending = False
     dashboard.tsi_conditioner_action_query_context = ""
     dashboard.tsi_conditioner_action_query_node_uid = ""
 
+    _populate_tsi_conditioner_method_category_combo(dashboard)
+    _populate_tsi_conditioner_method_method_combo(dashboard)
+
+    dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(False)
+    dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText("Customize")
+    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setEnabled(True)
+    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText("Query Actions")
+
     clear_tsi_conditioner_method_parameter_controls(dashboard)
+    _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 def clear_tsi_conditioner_method_parameter_controls(dashboard: QtCore.QObject):
     """
@@ -2833,18 +3716,22 @@ def clear_tsi_conditioner_method_parameter_controls(dashboard: QtCore.QObject):
     dashboard.tsi_conditioner_method_current_schema = {}
     dashboard.tsi_conditioner_method_customized = False
 
+
 def _slotTSI_ConditionerMethodCategoryChanged(dashboard: QtCore.QObject):
     _populate_tsi_conditioner_method_method_combo(dashboard)
-    clear_tsi_conditioner_method_actions(dashboard)
+    _populate_tsi_conditioner_method_action_combo(dashboard)
     _tsi_conditioner_update_workflow_ribbon(dashboard)
 
+
 def _slotTSI_ConditionerMethodMethodChanged(dashboard: QtCore.QObject):
-    clear_tsi_conditioner_method_actions(dashboard)
+    _populate_tsi_conditioner_method_action_combo(dashboard)
     _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 def _slotTSI_ConditionerMethodHardwareChanged(dashboard: QtCore.QObject):
     clear_tsi_conditioner_method_actions(dashboard)
     _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 def _slotTSI_ConditionerMethodActionChanged(dashboard: QtCore.QObject):
     record = dashboard.ui.comboBox_tsi_conditioner_method_action.currentData()
@@ -2869,15 +3756,10 @@ def _slotTSI_ConditionerMethodActionChanged(dashboard: QtCore.QObject):
 
     _tsi_conditioner_update_workflow_ribbon(dashboard)
 
+
 @qasync.asyncSlot(QtCore.QObject)
 async def _slotTSI_ConditionerMethodQueryActionsClicked(dashboard: QtCore.QObject):
-    """
-    Queries Conditioner actions.
-
-    This function should only be connected to the Query Actions button.
-    Source changes, node changes, hardware refreshes, and heartbeat updates
-    must not call this function.
-    """
+    """Query the selected node for Conditioner actions valid for this source."""
     uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
 
     if not uid:
@@ -2886,23 +3768,16 @@ async def _slotTSI_ConditionerMethodQueryActionsClicked(dashboard: QtCore.QObjec
         )
         return
 
-    category = _tsi_conditioner_selected_method_category(dashboard)
-    method = _tsi_conditioner_selected_method(dashboard)
     source = _tsi_conditioner_current_source(dashboard)
     source_tag = _tsi_conditioner_selected_source_tag(dashboard)
     hardware = _tsi_conditioner_selected_method_hardware(dashboard)
 
-    include_tags = [
-        "tsi.conditioner",
-        f"tsi.conditioner.category.{category}",
-        f"tsi.conditioner.method.{method}",
-    ]
-
+    include_tags = ["tsi.conditioner"]
     if source_tag:
         include_tags.append(source_tag)
 
     context_source = source.lower().replace(" ", "_")
-    context = f"tsi.conditioner.{category}.{method}.{context_source}"
+    context = f"tsi.conditioner.catalog.{context_source}"
 
     clear_tsi_conditioner_method_actions(dashboard)
 
@@ -2910,16 +3785,13 @@ async def _slotTSI_ConditionerMethodQueryActionsClicked(dashboard: QtCore.QObjec
     dashboard.tsi_conditioner_action_query_context = context
     dashboard.tsi_conditioner_action_query_node_uid = uid
 
-    dashboard.ui.comboBox_tsi_conditioner_method_action.setEnabled(False)
     dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setEnabled(False)
     dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText("Querying...")
 
     dashboard.logger.debug(
-        "[Conditioner] Querying actions: "
-        f"uid={uid!r}, "
-        f"context={context!r}, "
-        f"include_tags={include_tags!r}, "
-        f"hardware={hardware!r}"
+        "[Conditioner] Querying action catalog: "
+        f"uid={uid!r}, context={context!r}, "
+        f"include_tags={include_tags!r}, hardware={hardware!r}"
     )
 
     await dashboard.backend.queryPluginActions(
@@ -2932,19 +3804,14 @@ async def _slotTSI_ConditionerMethodQueryActionsClicked(dashboard: QtCore.QObjec
         hardware=hardware,
     )
 
+
 def handle_tsi_conditioner_action_query_results(
     dashboard: QtCore.QObject,
     node_uid: str,
     context: str,
     actions: list,
 ):
-    """
-    Handles Conditioner action-query results.
-
-    The Query Actions button sends the request. This function receives the
-    async result and populates the action combo only if the result still matches
-    the latest pending Conditioner query.
-    """
+    """Populate Conditioner Category, Method, and Action from queried tags."""
     expected_context = str(
         getattr(dashboard, "tsi_conditioner_action_query_context", "") or ""
     )
@@ -2953,7 +3820,6 @@ def handle_tsi_conditioner_action_query_results(
     )
     result_context = str(context or "")
     result_node_uid = str(node_uid or "")
-
     query_pending = bool(
         getattr(dashboard, "tsi_conditioner_action_query_pending", False)
     )
@@ -2965,8 +3831,7 @@ def handle_tsi_conditioner_action_query_results(
     ):
         dashboard.logger.debug(
             "[Conditioner] Ignoring stale action query results: "
-            f"node_uid={result_node_uid!r}, "
-            f"context={result_context!r}, "
+            f"node_uid={result_node_uid!r}, context={result_context!r}, "
             f"expected_node_uid={expected_node_uid!r}, "
             f"expected_context={expected_context!r}, "
             f"query_pending={query_pending}"
@@ -2976,50 +3841,22 @@ def handle_tsi_conditioner_action_query_results(
     dashboard.tsi_conditioner_action_query_pending = False
     dashboard.tsi_conditioner_action_query_context = ""
     dashboard.tsi_conditioner_action_query_node_uid = ""
+    dashboard.tsi_conditioner_method_actions = actions if isinstance(actions, list) else []
 
-    combo = dashboard.ui.comboBox_tsi_conditioner_method_action
+    _populate_tsi_conditioner_method_category_combo(dashboard)
+    _populate_tsi_conditioner_method_method_combo(dashboard)
+    _populate_tsi_conditioner_method_action_combo(dashboard)
 
-    dashboard.tsi_conditioner_method_actions = actions or []
-
-    combo.blockSignals(True)
-    combo.clear()
-
-    for action_record in dashboard.tsi_conditioner_method_actions:
-        plugin_name = str(action_record.get("plugin", "")).strip()
-        action_name = str(action_record.get("action", "")).strip()
-
-        if not plugin_name or not action_name:
-            continue
-
-        combo.addItem(
-            f"{plugin_name}: {action_name}",
-            {
-                "plugin": plugin_name,
-                "action": action_name,
-            },
-        )
-
-    combo.blockSignals(False)
-
-    has_actions = combo.count() > 0
-
-    combo.setEnabled(has_actions)
-    dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(
-        has_actions
-    )
-    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText(
-        "Query Actions"
-    )
+    dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setText("Query Actions")
     dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setEnabled(True)
 
-    if has_actions:
-        combo.setCurrentIndex(0)
-        _slotTSI_ConditionerMethodActionChanged(dashboard)
-    else:
-        dashboard.tsi_conditioner_selected_plugin = ""
-        dashboard.tsi_conditioner_selected_action = ""
+    if not dashboard.tsi_conditioner_method_actions:
+        dashboard.logger.info(
+            "[Conditioner] No plugin actions matched the selected source/hardware."
+        )
 
     _tsi_conditioner_update_workflow_ribbon(dashboard)
+
 
 @qasync.asyncSlot(QtCore.QObject)
 async def _slotTSI_ConditionerMethodQueryParametersClicked(dashboard: QtCore.QObject):
@@ -3093,7 +3930,7 @@ def handle_tsi_conditioner_action_schema(
 
         dashboard.tsi_conditioner_method_customized = False
         dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText(
-            "Query Parameters"
+            "Customize"
         )
         dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(
             bool(selected_plugin and selected_action)
@@ -3122,7 +3959,7 @@ def handle_tsi_conditioner_action_schema(
     dashboard.tsi_conditioner_method_customized = True
 
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText(
-        "Query Parameters"
+        "Customize"
     )
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(True)
 
@@ -3269,6 +4106,7 @@ def _create_tsi_conditioner_method_parameter_widget(
     widget.setFixedWidth(compact_width)
     return widget
 
+
 def _tsi_conditioner_method_requires_hardware(dashboard: QtCore.QObject) -> bool:
     """
     Returns True when the selected Conditioner source requires selected-node
@@ -3282,20 +4120,21 @@ def _tsi_conditioner_method_requires_hardware(dashboard: QtCore.QObject) -> bool
     """
     return _tsi_conditioner_current_source(dashboard) == "Frequencies"
 
-def _tsi_conditioner_selected_source_tag(dashboard: QtCore.QObject) -> str:
-    """
-    Returns the source-specific plugin-action tag for the selected Conditioner
-    input source.
-    """
-    source = _tsi_conditioner_current_source(dashboard)
 
+def _tsi_conditioner_selected_source_tag(dashboard: QtCore.QObject) -> str:
+    """Return the source-specific Conditioner action tag."""
     source_tags = {
         "File": "tsi.conditioner.source.file",
         "Folder": "tsi.conditioner.source.folder",
+        "Artifact": "tsi.conditioner.source.artifact",
         "Frequencies": "tsi.conditioner.source.frequencies",
     }
 
-    return source_tags.get(source, "")
+    return source_tags.get(
+        _tsi_conditioner_current_source(dashboard),
+        "",
+    )
+
 
 def _tsi_conditioner_selected_method_hardware(dashboard: QtCore.QObject) -> str:
     """
@@ -3314,21 +4153,27 @@ def _tsi_conditioner_selected_method_hardware(dashboard: QtCore.QObject) -> str:
 
     return hardware
 
+
 def _tsi_conditioner_apply_input_source_page(dashboard: QtCore.QObject):
-    """
-    Applies the current Conditioner input source to the input stacked widget
-    without clearing queried actions or rendered parameters.
-    """
+    """Apply source page and source-specific controls without clearing actions."""
     source = _tsi_conditioner_current_source(dashboard)
 
-    if source in ["File", "Folder"]:
+    if source in ["File", "Folder", "Artifact"]:
         dashboard.ui.stackedWidget_tsi_conditioner_input.setCurrentIndex(0)
-
     elif source == "Frequencies":
         dashboard.ui.stackedWidget_tsi_conditioner_input.setCurrentIndex(1)
 
+    _tsi_conditioner_update_input_source_controls(dashboard)
+
+    if source == "Artifact":
+        refresh_tsi_conditioner_input_artifacts(dashboard)
+
+    if source == "Frequencies":
+        _tsi_conditioner_apply_soi_frequency_prefill(dashboard)
+
     update_tsi_conditioner_method_hardware_combo(dashboard)
     update_tsi_conditioner_file_gate(dashboard)
+
 
 def _clear_layout_widgets(layout: QtWidgets.QLayout):
     """
@@ -3349,6 +4194,7 @@ def _clear_layout_widgets(layout: QtWidgets.QLayout):
         if child_layout is not None:
             _clear_layout_widgets(child_layout)
 
+
 def reset_tsi_conditioner_method_for_selected_node_change(
     dashboard: QtCore.QObject,
 ):
@@ -3367,9 +4213,13 @@ def reset_tsi_conditioner_method_for_selected_node_change(
     dashboard.ui.pushButton_tsi_conditioner_method_query_actions.setEnabled(True)
 
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setText(
-        "Query Parameters"
+        "Customize"
     )
     dashboard.ui.pushButton_tsi_conditioner_method_query_parameters.setEnabled(False)
+
+    refresh_tsi_conditioner_soi_context(dashboard)
+    refresh_tsi_conditioner_input_artifacts(dashboard)
+    request_tsi_conditioner_sois_refresh(dashboard)
 
     _tsi_conditioner_update_workflow_ribbon(dashboard)
 
@@ -3481,17 +4331,6 @@ def _slotTSI_ConditionerRunNowClicked(dashboard: QtCore.QObject):
     if text_edit is not None:
         text_edit.setPlainText(prefix)
 
-def update_tsi_conditioner_run_node_label(dashboard: QtCore.QObject):
-    """
-    Updates Section 3 run node label from the selected Sensor Node.
-    """
-    label = getattr(dashboard.ui, "label2_tsi_conditioner_run_node", None)
-    if label is None:
-        return
-
-    node_label = _tsi_conditioner_selected_node_label(dashboard)
-    label.setText(node_label)
-    label.setToolTip(node_label)
 
 def _tsi_conditioner_set_run_button_state(
     dashboard: QtCore.QObject,
@@ -3568,21 +4407,17 @@ def _tsi_conditioner_get_method_parameter_values(
 
     return values
 
+
 def _tsi_conditioner_get_input_filepaths_for_run(
     dashboard: QtCore.QObject,
 ) -> list:
-    """
-    Returns Conditioner input paths for the current source type.
-
-    First implementation:
-      File   -> selected file only
-      Folder -> every visible file in the input list
-    """
+    """Return local file paths for File/Folder sources only."""
     source = _tsi_conditioner_current_source(dashboard)
     filepaths = []
 
     if source == "File":
         filepath = _tsi_conditioner_selected_input_file(dashboard)
+
         if filepath and os.path.isfile(filepath):
             filepaths.append(filepath)
 
@@ -3592,14 +4427,20 @@ def _tsi_conditioner_get_input_filepaths_for_run(
 
         for row in range(list_widget.count()):
             item = list_widget.item(row)
+
             if item is None:
                 continue
 
-            filepath = os.path.join(folder, item.text())
+            filepath = os.path.join(
+                folder,
+                item.text(),
+            )
+
             if os.path.isfile(filepath):
                 filepaths.append(filepath)
 
     return filepaths
+
 
 def _tsi_conditioner_samples_from_size(
     size_bytes: int,
@@ -3726,20 +4567,15 @@ async def _slotTSI_ConditionerRunStartStopClicked(
         .replace("-", "_")
     )
 
-    if method_id != "normal_decay":
-        await fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
-            dashboard,
-            "This first-pass Conditioner runner currently supports Normal Decay only.",
-        )
-        return
-
     source_type = _tsi_conditioner_selected_source_type(dashboard)
     input_files = []
     frequency_plan = []
 
+    managed_input = {}
+
     if source_type in ["file", "folder"]:
         input_files = _tsi_conditioner_get_input_filepaths_for_run(
-            dashboard,
+            dashboard
         )
 
         if not input_files:
@@ -3749,9 +4585,21 @@ async def _slotTSI_ConditionerRunStartStopClicked(
             )
             return
 
+    elif source_type == "artifact":
+        managed_input = _tsi_conditioner_collect_managed_artifact_input(
+            dashboard
+        )
+
+        if not managed_input:
+            await fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
+                dashboard,
+                "Select an Artifact and at least one IQ member.",
+            )
+            return
+
     elif source_type == "frequencies":
         frequency_plan = _tsi_conditioner_get_frequency_plan_for_run(
-            dashboard,
+            dashboard
         )
 
         if not frequency_plan:
@@ -3823,6 +4671,27 @@ async def _slotTSI_ConditionerRunStartStopClicked(
         parameters["output_format"] = output_format or "Raw IQ Files"
         parameters["prefix"] = prefix
 
+        soi_context = _tsi_conditioner_selected_soi_context(dashboard)
+
+        if soi_context:
+            parameters["input_soi_id"] = str(
+                soi_context.get("soi_id", "")
+                or ""
+            ).strip()
+            parameters["input_soi_key"] = str(
+                soi_context.get("soi_key", "")
+                or ""
+            ).strip()
+            parameters["input_soi_frequency_mhz"] = (
+                soi_context.get("frequency_mhz")
+            )
+
+            if soi_context.get("frequency_mhz") not in [None, "", "None"]:
+                parameters.setdefault(
+                    "tuned_frequency",
+                    soi_context.get("frequency_mhz"),
+                )
+
         if output_mode == "Local Folder":
             parameters["output_directory"] = output_dir
         else:
@@ -3830,6 +4699,20 @@ async def _slotTSI_ConditionerRunStartStopClicked(
 
         if source_type in ["file", "folder"]:
             parameters["all_filepaths"] = input_files
+
+        elif source_type == "artifact":
+            artifact_ids = list(
+                managed_input.get("artifact_ids", [])
+                or []
+            )
+
+            parameters["managed_input"] = managed_input
+            parameters["source_artifact_ids"] = artifact_ids
+            parameters["source_artifact_id"] = (
+                artifact_ids[0]
+                if len(artifact_ids) == 1
+                else ""
+            )
 
         elif source_type == "frequencies":
             parameters["frequency_plan"] = frequency_plan
@@ -4574,31 +5457,89 @@ def _tsi_conditioner_poll_run_completion(
     )
 
 
+def _tsi_conditioner_cached_result_file(dashboard: QtCore.QObject, row: int) -> str:
+    """Resolve one Conditioner result row to its verified Dashboard Artifact cache."""
+    table = getattr(dashboard.ui, "tableWidget_tsi_conditioner_results", None)
+    if table is None or row < 0 or row >= table.rowCount():
+        return ""
+
+    file_item = table.item(row, 0)
+    if file_item is None:
+        return ""
+
+    filename = str(file_item.text() or "").strip()
+    payload = getattr(dashboard, "tsi_conditioner_last_artifact_payload", {}) or {}
+    artifact_id = str(
+        payload.get("artifact_id")
+        or getattr(dashboard, "tsi_conditioner_last_artifact_id", "")
+        or ""
+    ).strip()
+
+    if not artifact_id or not filename:
+        return ""
+
+    controller = getattr(dashboard.backend, "artifact_transfer_controller", None)
+    if controller is None:
+        return ""
+
+    local_files = controller.get_local_files(artifact_id) or {}
+    if not local_files:
+        return ""
+
+    artifact_record = None
+    tactical_artifacts = getattr(dashboard, "tactical_artifacts", {}) or {}
+
+    if isinstance(tactical_artifacts, dict):
+        artifact_record = tactical_artifacts.get(artifact_id)
+
+        if artifact_record is None:
+            for key, record in tactical_artifacts.items():
+                if not isinstance(record, dict):
+                    continue
+                record_id = str(record.get("artifact_id") or record.get("id") or key or "").strip()
+                if record_id == artifact_id:
+                    artifact_record = record
+                    break
+
+    if isinstance(artifact_record, dict):
+        files = artifact_record.get("files", []) or []
+        if isinstance(files, list):
+            for record in files:
+                if not isinstance(record, dict):
+                    continue
+
+                record_name = str(
+                    record.get("name")
+                    or record.get("relative_path")
+                    or record.get("path")
+                    or ""
+                ).strip()
+
+                if os.path.basename(record_name) != os.path.basename(filename):
+                    continue
+
+                file_id = str(record.get("id") or record.get("file_id") or "").strip()
+                local_path = str(local_files.get(file_id, "") or "").strip()
+
+                if local_path and os.path.isfile(local_path):
+                    return local_path
+
+    for local_path in local_files.values():
+        local_path = str(local_path or "").strip()
+        if local_path and os.path.isfile(local_path) and os.path.basename(local_path) == os.path.basename(filename):
+            return local_path
+
+    return ""
+
+
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerResultsPreviewClicked(dashboard: QtCore.QObject):
-    """
-    Previews the selected Conditioner output file.
-
-    Remote artifact rows are metadata-only until a download/cache workflow
-    exists, so preview is disabled for those rows.
-    """
-    if _tsi_conditioner_payload_is_remote_artifact(dashboard):
-        fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            "Remote artifact files must be downloaded before preview."
-        )
-        return
-
-    table = getattr(
-        dashboard.ui,
-        "tableWidget_tsi_conditioner_results",
-        None,
-    )
-
+    """Preview the selected Conditioner output from local storage or Artifact cache."""
+    table = getattr(dashboard.ui, "tableWidget_tsi_conditioner_results", None)
     if table is None:
         return
 
     row = table.currentRow()
-
     if row < 0:
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
             "Select a Conditioner result first."
@@ -4606,43 +5547,45 @@ def _slotTSI_ConditionerResultsPreviewClicked(dashboard: QtCore.QObject):
         return
 
     file_item = table.item(row, 0)
-
     if file_item is None:
         return
 
-    filepath = file_item.data(QtCore.Qt.UserRole)
+    filepath = ""
+    remote_artifact = _tsi_conditioner_payload_is_remote_artifact(dashboard)
 
-    if not filepath:
-        output_dir = _tsi_conditioner_get_run_output_folder(dashboard)
-        filepath = os.path.join(output_dir, file_item.text())
+    if remote_artifact:
+        filepath = _tsi_conditioner_cached_result_file(dashboard, row)
+
+        if not filepath:
+            fissure.Dashboard.UI_Components.Qt5.errorMessage(
+                "Remote artifact files must be downloaded before preview."
+            )
+            _tsi_conditioner_update_results_action_gate(dashboard)
+            return
+    else:
+        filepath = str(file_item.data(QtCore.Qt.UserRole) or "").strip()
+
+        if not filepath:
+            output_dir = _tsi_conditioner_get_run_output_folder(dashboard)
+            filepath = os.path.join(output_dir, file_item.text())
 
     if not filepath or not os.path.isfile(filepath):
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
             "The selected Conditioner output file is not available locally."
         )
+        _tsi_conditioner_update_results_action_gate(dashboard)
         return
 
     data_type_item = table.item(row, 3)
     sample_rate_item = table.item(row, 4)
-
     previous_data_type = ""
     previous_sample_rate = ""
-
-    data_type_combo = getattr(
-        dashboard.ui,
-        "comboBox_tsi_conditioner_input_data_type",
-        None,
-    )
-    sample_rate_text = getattr(
-        dashboard.ui,
-        "textEdit_tsi_conditioner_file_sample_rate",
-        None,
-    )
+    data_type_combo = getattr(dashboard.ui, "comboBox_tsi_conditioner_input_data_type", None)
+    sample_rate_text = getattr(dashboard.ui, "textEdit_tsi_conditioner_file_sample_rate", None)
 
     try:
         if data_type_combo is not None and data_type_item is not None:
             previous_data_type = data_type_combo.currentText().strip()
-
             data_type = data_type_item.text().strip()
             index = data_type_combo.findText(data_type)
 
@@ -4653,7 +5596,6 @@ def _slotTSI_ConditionerResultsPreviewClicked(dashboard: QtCore.QObject):
 
         if sample_rate_text is not None and sample_rate_item is not None:
             previous_sample_rate = sample_rate_text.toPlainText().strip()
-
             sample_rate = sample_rate_item.text().strip()
 
             try:
@@ -4667,12 +5609,10 @@ def _slotTSI_ConditionerResultsPreviewClicked(dashboard: QtCore.QObject):
 
         _tsi_conditioner_plot_preview(dashboard, filepath)
 
-    except Exception as e:
-        dashboard.logger.error(
-            f"[Conditioner] Failed to preview output IQ file: {e}"
-        )
+    except Exception as error:
+        dashboard.logger.error(f"[Conditioner] Failed to preview output IQ file: {error}")
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            f"Failed to preview output IQ file:\n{e}"
+            f"Failed to preview output IQ file:\n{error}"
         )
 
     finally:
@@ -4688,6 +5628,8 @@ def _slotTSI_ConditionerResultsPreviewClicked(dashboard: QtCore.QObject):
             sample_rate_text.setPlainText(previous_sample_rate)
             sample_rate_text.blockSignals(False)
 
+        _tsi_conditioner_update_results_action_gate(dashboard)
+        
 
 @qasync.asyncSlot(QtCore.QObject)
 async def _slotTSI_ConditionerRunDownloadArtifactClicked(
@@ -5797,24 +6739,23 @@ def update_tsi_conditioner_status_from_selected_node(
         display_status,
     )
 
+
 def _tsi_conditioner_selected_source_type(dashboard: QtCore.QObject) -> str:
-    """
-    Returns the Conditioner input source type for action parameters.
-
-    UI text:
-        File        -> file
-        Folder      -> folder
-        Frequencies -> frequencies
-    """
-    source = _tsi_conditioner_current_source(dashboard)
-
+    """Return normalized Conditioner source type for operation parameters."""
     source_types = {
         "File": "file",
         "Folder": "folder",
+        "Artifact": "artifact",
         "Frequencies": "frequencies",
     }
 
-    return source_types.get(source, source.lower().replace(" ", "_"))
+    source = _tsi_conditioner_current_source(dashboard)
+
+    return source_types.get(
+        source,
+        source.lower().replace(" ", "_"),
+    )
+
 
 def _tsi_conditioner_delete_output_file_and_sidecars(
     dashboard: QtCore.QObject,
@@ -6222,17 +7163,12 @@ def _tsi_conditioner_resolve_soi_frequency(
 
     return _tsi_conditioner_prompt_for_optional_soi_frequency(dashboard)
 
+
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTSI_ConditionerResultsPromoteToSoiClicked(
     dashboard: QtCore.QObject,
 ):
-    """
-    Promotes all visible Conditioner result rows into one metadata-only SOI.
-
-    The SOI is stored at HIPRFISR and associated with the currently selected
-    sensor node. Feature extraction, classification, and protocol discovery can
-    attach details later.
-    """
+    """Save Conditioner results to the selected SOI or create a new SOI."""
     table = getattr(
         dashboard.ui,
         "tableWidget_tsi_conditioner_results",
@@ -6241,15 +7177,18 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
 
     if table is None or table.rowCount() <= 0:
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            "There are no Conditioner results to promote."
+            "There are no Conditioner results to save."
         )
         return
 
-    node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    node_uid = str(
+        getattr(dashboard, "selected_node_uid", "")
+        or ""
+    ).strip()
 
     if not node_uid:
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            "Select a sensor node before promoting Conditioner results to an SOI."
+            "Select a Sensor Node first."
         )
         return
 
@@ -6260,14 +7199,22 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
     ) or {}
 
     if not payload:
-        metadata_path = _tsi_conditioner_latest_metadata_path(dashboard)
+        metadata_path = _tsi_conditioner_latest_metadata_path(
+            dashboard
+        )
+
         if metadata_path and os.path.isfile(metadata_path):
             try:
-                with open(metadata_path, "r", encoding="utf-8") as handle:
+                with open(
+                    metadata_path,
+                    "r",
+                    encoding="utf-8",
+                ) as handle:
                     payload = json.load(handle)
-            except Exception as e:
+            except Exception as error:
                 dashboard.logger.warning(
-                    f"[Conditioner] Could not read Conditioner metadata for SOI promotion: {e}"
+                    "[Conditioner] Could not read result metadata for SOI save: "
+                    f"{error}"
                 )
                 payload = {}
 
@@ -6285,27 +7232,42 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
             payload_files_by_name=payload_files_by_name,
         )
 
-        if not record:
-            continue
-
-        files.append(record)
+        if record:
+            files.append(record)
 
     if not files:
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            "No valid Conditioner result files were found to promote."
+            "No valid Conditioner result files were found."
         )
         return
 
-    frequency_mhz = _tsi_conditioner_resolve_soi_frequency(
-        dashboard=dashboard,
-        payload=payload,
-        files=files,
+    existing_context = _tsi_conditioner_selected_soi_context(
+        dashboard
     )
 
-    if frequency_mhz == "cancelled":
-        return
+    existing_soi = bool(existing_context)
 
-    soi_id = str(uuid.uuid4())
+    if existing_soi:
+        soi_id = str(
+            existing_context.get("soi_id", "")
+            or ""
+        ).strip()
+        frequency_mhz = None
+        status = ""
+        mode = "saved"
+    else:
+        soi_id = str(uuid.uuid4())
+        frequency_mhz = _tsi_conditioner_resolve_soi_frequency(
+            dashboard=dashboard,
+            payload=payload,
+            files=files,
+        )
+
+        if frequency_mhz == "cancelled":
+            return
+
+        status = "EVIDENCE_READY"
+        mode = "created"
 
     operation_id = str(
         payload.get("operation_id", "")
@@ -6319,6 +7281,20 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
         or ""
     ).strip()
 
+    source_artifact_ids = payload.get(
+        "source_artifact_ids",
+        [],
+    )
+
+    if not isinstance(source_artifact_ids, list):
+        source_artifact_ids = [source_artifact_ids]
+
+    source_artifact_ids = [
+        str(value or "").strip()
+        for value in source_artifact_ids
+        if str(value or "").strip()
+    ]
+
     source_type = str(
         payload.get("source_type", "")
         or _tsi_conditioner_current_source(dashboard)
@@ -6330,14 +7306,22 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
         "comboBox_tsi_conditioner_method_method",
         None,
     )
-    method = method_combo.currentText().strip() if method_combo is not None else ""
+    method = (
+        method_combo.currentText().strip()
+        if method_combo is not None
+        else ""
+    )
 
     action_combo = getattr(
         dashboard.ui,
         "comboBox_tsi_conditioner_method_action",
         None,
     )
-    action = action_combo.currentText().strip() if action_combo is not None else ""
+    action = (
+        action_combo.currentText().strip()
+        if action_combo is not None
+        else ""
+    )
 
     output_format_combo = getattr(
         dashboard.ui,
@@ -6363,34 +7347,80 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
         or ""
     )
 
-    summary = {
-        "stage": "conditioner_promoted",
-        "stage_order": 50,
-        "folder": _tsi_conditioner_get_run_output_folder(dashboard),
-        "files_present": True,
-        "file_count": len(files),
+    artifact_links = []
 
+    if artifact_id:
+        artifact_links.append(
+            {
+                "artifact_id": artifact_id,
+                "operation_id": operation_id,
+                "role": "conditioned_iq",
+                "source": "tsi_conditioner",
+            }
+        )
+    elif source_artifact_ids:
+        artifact_links.extend(
+            {
+                "artifact_id": source_artifact_id,
+                "role": "source_iq",
+                "source": "tsi_conditioner",
+            }
+            for source_artifact_id in source_artifact_ids
+        )
+
+    history_entry = {
+        "analysis_id": (
+            f"conditioner:{operation_id}"
+            if operation_id
+            else f"conditioner:{uuid.uuid4()}"
+        ),
+        "stage": "conditioner",
         "source": "tsi_conditioner",
         "source_type": source_type,
         "method": method,
         "action": action,
-        "output_format": output_format,
-
-        "sample_rate": sample_rate,
-        "data_type": data_type,
         "operation_id": operation_id,
         "artifact_id": artifact_id,
-
-        "description": "Conditioner results promoted to SOI",
-        "files": files,
-
-        # Reserved for next workflow steps.
-        "features": {},
-        "classification": {},
-        "protocol": {},
-        "model_classification": "",
-        "model_confidence": None,
+        "source_artifact_ids": source_artifact_ids,
+        "file_count": len(files),
+        "output_format": output_format,
+        "created_at": datetime.datetime.utcnow().isoformat("T") + "Z",
     }
+
+    summary = {
+        "artifact_links": artifact_links,
+        "analysis_history": [history_entry],
+    }
+
+    if not existing_soi:
+        summary.update(
+            {
+                "stage": "conditioner_promoted",
+                "stage_order": 50,
+                "folder": _tsi_conditioner_get_run_output_folder(
+                    dashboard
+                ),
+                "files_present": True,
+                "file_count": len(files),
+                "source": "tsi_conditioner",
+                "source_type": source_type,
+                "method": method,
+                "action": action,
+                "output_format": output_format,
+                "sample_rate": sample_rate,
+                "data_type": data_type,
+                "operation_id": operation_id,
+                "artifact_id": artifact_id,
+                "source_artifact_ids": source_artifact_ids,
+                "description": "Conditioner results promoted to SOI",
+                "files": files,
+                "features": {},
+                "classification": {},
+                "protocol": {},
+                "model_classification": "",
+                "model_confidence": None,
+            }
+        )
 
     button = getattr(
         dashboard.ui,
@@ -6403,7 +7433,11 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
 
     _tsi_conditioner_set_run_status(
         dashboard,
-        f"Promoting {len(files)} Conditioner results to SOI...",
+        (
+            f"Saving {len(files)} Conditioner results to SOI..."
+            if existing_soi
+            else f"Creating SOI from {len(files)} Conditioner results..."
+        ),
     )
 
     task = asyncio.ensure_future(
@@ -6412,6 +7446,7 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
             node_uid=node_uid,
             soi_id=soi_id,
             frequency_mhz=frequency_mhz,
+            status=status,
             operation_id=operation_id,
             artifact_id=artifact_id,
             summary=summary,
@@ -6424,28 +7459,27 @@ def _slotTSI_ConditionerResultsPromoteToSoiClicked(
             future=future,
             button=button,
             soi_id=soi_id,
+            mode=mode,
         )
     )
+
 
 async def _tsi_conditioner_send_promote_to_soi(
     dashboard: QtCore.QObject,
     node_uid: str,
     soi_id: str,
     frequency_mhz,
+    status: str,
     operation_id: str,
     artifact_id: str,
     summary: dict,
 ):
-    """
-    Sends the Conditioner SOI promotion request to HIPRFISR.
-
-    This runs as a scheduled backend task so the Qt slot can return immediately.
-    """
+    """Send a Conditioner SOI create/update through the normal hub SOI path."""
     await dashboard.backend.tacticalConditionerPromoteToSoi(
         node_uid=node_uid,
         soi_id=soi_id,
         frequency_mhz=frequency_mhz,
-        status="EVIDENCE_READY",
+        status=status,
         operation_id=operation_id,
         artifact_id=artifact_id,
         summary=summary,
@@ -6457,14 +7491,9 @@ def _tsi_conditioner_promote_to_soi_done(
     future,
     button,
     soi_id: str,
+    mode: str = "created",
 ):
-    """
-    Handles completion of the scheduled Promote to SOI backend send.
-
-    Artifact-managed metadata files are immutable after registration. Promotion
-    state is kept in Dashboard/SOI relationship state and must not rewrite a
-    registered artifact member.
-    """
+    """Finish a Conditioner SOI save/create without rewriting managed artifacts."""
     try:
         future.result()
 
@@ -6485,22 +7514,31 @@ def _tsi_conditioner_promote_to_soi_done(
 
         _tsi_conditioner_update_workflow_ribbon(dashboard)
 
+        if mode == "saved":
+            status_text = f"Saved Conditioner results to SOI: {soi_id}"
+        else:
+            status_text = f"Created SOI from Conditioner results: {soi_id}"
+
         _tsi_conditioner_set_run_status(
             dashboard,
-            f"Promoted Conditioner results to SOI: {soi_id}",
+            status_text,
         )
 
-    except Exception as e:
+    except Exception as error:
         dashboard.logger.error(
-            f"[Conditioner] Failed to promote results to SOI: {e}"
+            f"[Conditioner] Failed to save results to SOI: {error}"
         )
         fissure.Dashboard.UI_Components.Qt5.errorMessage(
-            f"Failed to promote Conditioner results to SOI:\n{e}"
+            f"Failed to save Conditioner results to SOI:\n{error}"
         )
 
     finally:
         if button is not None:
             button.setEnabled(True)
+
+        _tsi_conditioner_update_soi_result_button(
+            dashboard
+        )
 
 
 def _tsi_conditioner_mark_results_unpromoted(
@@ -6929,6 +7967,8 @@ def _tsi_conditioner_update_results_action_gate(
     )
     if promote_button is not None:
         promote_button.setEnabled(has_rows)
+    
+    _tsi_conditioner_update_soi_result_button(dashboard)
 
     mutable_buttons = {
         "pushButton_tsi_conditioner_results_delete": (
@@ -7269,21 +8309,10 @@ def handle_tsi_conditioner_artifact_metadata(
     node_uid: str = "",
     artifacts: list = None,
 ):
-    """
-    Consumes artifact-list metadata for the Conditioner Results table.
-
-    Rule:
-        If dashboard.tsi_conditioner_opid is set, only metadata with that exact
-        operation_id can populate the Results table.
-
-    This must remain true even after the run finishes, because artifact-list
-    refreshes can arrive later and include older Conditioner artifacts.
-
-    A remote run may clear tsi_conditioner_running before its artifact-list
-    metadata arrives. Treat a matching payload as completion when the progress
-    bar is still in its pending 1-99% state.
-    """
     artifacts = artifacts or []
+
+    if _tsi_conditioner_current_source(dashboard) == "Artifact":
+        refresh_tsi_conditioner_input_artifacts(dashboard)
 
     selected_node_uid = str(
         getattr(dashboard, "selected_node_uid", "") or ""
@@ -7388,20 +8417,19 @@ def handle_tsi_conditioner_artifact_metadata(
 
         candidate_payloads.append(payload)
 
-    if active_operation_id:
-        conditioner_payloads = matching_payloads
+    if not active_operation_id:
+        return
 
-        if not conditioner_payloads:
-            if ignored_count:
-                dashboard.logger.info(
-                    "[Conditioner] Ignored %s Conditioner artifact payload(s); "
-                    "none matched active_opid=%s",
-                    ignored_count,
-                    active_operation_id,
-                )
-            return
-    else:
-        conditioner_payloads = candidate_payloads
+    conditioner_payloads = matching_payloads
+
+    if not conditioner_payloads:
+        if ignored_count:
+            dashboard.logger.info(
+                "[Conditioner] Ignored %s Conditioner artifact payload(s); none matched active_opid=%s",
+                ignored_count,
+                active_operation_id,
+            )
+        return
 
     if not conditioner_payloads:
         return

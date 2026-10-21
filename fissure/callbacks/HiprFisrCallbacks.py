@@ -8,13 +8,13 @@ import xml.etree.ElementTree as ET
 import base64
 import binascii
 import json
+import math
 import re
 import fissure.comms
 import fissure.utils
 import fissure.utils.library
 from fissure.utils.common import PLUGIN_DIR
 from fissure.utils import plugin
-from fissure.utils import plugin_editor
 from fissure.utils.artifacts import ArtifactTracker
 import os
 import time
@@ -23,21 +23,11 @@ import asyncio
 import socket
 import shutil
 import tempfile
-import zipfile
 import importlib
 import traceback
 import zmq
 from datetime import datetime, timezone
 import uuid
-from fissure.Listeners import (
-    MeshtasticListener,
-    FilesystemListener,
-    ZMQSubscriberListener,
-    WebsitePollerListener,
-    SerialPortListener,
-    TCPUDPListener,
-    MQTTListener
-)
 
 
 """ HiprFisr Specific Callback Functions """
@@ -68,127 +58,6 @@ async def retrieveDatabaseCache(component: object, refresh_frontend_widgets=Fals
     }
     if component.dashboard_connected:
         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def addToLibrary(
-    component: object,
-    protocol_name="",
-    packet_name="",
-    packet_data="",
-    soi_data="",
-    modulation_type="",
-    demodulation_fg_data="",
-    attack="",
-    dissector="",
-):
-    """
-    Adds new data to the library.
-    """
-    # Maintain a Connection to the Database
-    conn = fissure.utils.library.openDatabaseConnection()
-
-    try:  
-        # Check Protocol
-        protocol_exists = False
-        all_protocols = fissure.utils.library.getProtocolNamesDirect(conn)
-        for protocol in all_protocols:
-            # Existing Protocol
-            if protocol == protocol_name:
-                protocol_exists = True
-
-                # Add New Modulation Type
-                if len(modulation_type) > 0:
-                    get_modulations = fissure.utils.library.getModulationTypesDirect(conn, protocol)
-                    if modulation_type not in get_modulations:
-                        fissure.utils.library.addModulationType(conn, protocol, modulation_type)
-
-                # Add New Packet Type
-                if len(packet_data) > 0:
-                    all_new_fields = {}
-                    for n in range(0, len(packet_data)):
-                        field_name = packet_data[n][0]
-                        field_length = packet_data[n][1]
-                        field_default = packet_data[n][2]
-                        field_order = n + 1
-                        is_crc = packet_data[n][3]
-                        crc_range = packet_data[n][4]
-
-                        field_to_add = fissure.utils.library.newField(
-                            field_name, field_default, field_length, field_order, is_crc, crc_range
-                        )
-                        all_new_fields.update(field_to_add)
-
-                    sort_order = len(fissure.utils.library.getPacketTypesDirect(conn, protocol)) + 1  # Makes the packet appear on the bottom of any list
-                    fissure.utils.library.addPacketType(conn, protocol, packet_name, {"Port": None, "Filename": None}, all_new_fields, sort_order)
-
-                # Add Dissector
-                if len(dissector) > 0:
-                    fissure.utils.library.addDissector(conn, protocol, packet_name, dissector[0], dissector[1])
-
-                # Add SOI Data
-                if len(soi_data) > 0:
-                    fissure.utils.library.addSOI(
-                        conn, 
-                        protocol, 
-                        soi_data["soi_name"], 
-                        soi_data["center_frequency"], 
-                        soi_data["start_frequency"], 
-                        soi_data["end_frequency"], 
-                        soi_data["bandwidth"], 
-                        soi_data["continuous"], 
-                        soi_data["modulation"],
-                        soi_data["notes"]
-                    )
-
-                # Add Demodulation Flow Graph
-                if len(demodulation_fg_data) > 0:
-                    if (
-                        (len(demodulation_fg_data["modulation_type"]) > 0)
-                        and (len(demodulation_fg_data["hardware"]) > 0)
-                        and (len(demodulation_fg_data["filename"]) > 0)
-                        and (len(demodulation_fg_data["output_type"]) > 0)
-                    ):
-                        fissure.utils.library.addDemodulationFlowGraph(
-                            conn,
-                            protocol_name,
-                            demodulation_fg_data["modulation_type"],
-                            demodulation_fg_data["hardware"],
-                            demodulation_fg_data["filename"],
-                            demodulation_fg_data["output_type"],
-                            fissure.utils.get_library_version()
-                        )
-
-                # Add Attack
-                if len(attack) > 0:
-                    fissure.utils.library.addAttack(
-                        conn, 
-                        protocol_name, 
-                        attack["attack_name"], 
-                        attack["modulation_type"],
-                        attack["hardware"],
-                        attack["attack_type"],
-                        attack["filename"],
-                        attack["category_name"],
-                        fissure.utils.get_library_version()
-                    )
-
-        # New Protocol
-        if not protocol_exists:
-            print("Protocol not found")
-            # make_new_protocol = fissure.utils.library.newProtocol(protocolname=protocol_name)
-            fissure.utils.library.addProtocol(conn, protocol_name, None, None)
-
-        # Send Message to PD to Update Library
-        await retrieveDatabaseCachePD(component)
-        
-        # Send Message to Dashboard to Update Library
-        await retrieveDatabaseCache(component, True)
-
-    except:
-        component.logger.error("Failure adding data to the FISSURE library.")
-
-    finally:
-        conn.close()
 
 
 async def removeFromLibrary(
@@ -279,91 +148,326 @@ async def disconnect(component: object):
     component.connect_loop = True
 
 
-async def enableDisableListener(component: object, listener_type="", listener_name="", parameters={}):
-    """
-    Creates a listener if it does not exist and then toggles its enable/disable status.
-    """
-    loop = asyncio.get_running_loop()
+async def queryListeningPosts(
+    component: object,
+):
+    """Return the authoritative HIPRFISR Listening Post inventory."""
+    error = ""
+    posts = []
 
-    if listener_type == "Meshtastic":
-        ListenerClass = MeshtasticListener
-    elif listener_type == "Filesystem":
-        ListenerClass = FilesystemListener
-    elif listener_type == "ZMQ SUB":
-        ListenerClass = ZMQSubscriberListener
-    elif listener_type == "Website Poller":
-        ListenerClass = WebsitePollerListener
-    elif listener_type == "Serial Port":
-        ListenerClass = SerialPortListener
-    elif listener_type == "TCP/UDP":
-        ListenerClass = TCPUDPListener
-    elif listener_type == "MQTT":
-        ListenerClass = MQTTListener        
-    else:
-        component.logger.error(f"Unknown listener type '{listener_type}'")
-        return
-
-    if listener_name not in component.alert_listeners:
-        # Create a new Listener if it does not exist
-        listener = ListenerClass(
-            component, 
-            listener_name, 
-            parameters, 
-            loop, 
-            alert_callback=alertReturn
+    try:
+        posts = (
+            component
+            .listening_post_manager
+            .snapshot()
         )
-        component.alert_listeners[listener_name] = listener
-        component.logger.info(f"Created new {listener_type} Listener: {listener_name}")
-    else:
-        listener = component.alert_listeners[listener_name]
 
-    # Toggle enable/disable status
-    if listener.is_active():
-        listener.disable()
-        component.logger.info(f"Listener '{listener_name}' disabled.")
-        status = "Disabled"
-    else:
-        listener.enable()
-        component.logger.info(f"Listener '{listener_name}' enabled.")
-        status = "Enabled"
+    except Exception as exc:
+        error = str(
+            exc
+        )
 
-    # Send Status to Dashboard
+        component.logger.error(
+            f"Could not query Listening Posts: {exc}"
+        )
+
     PARAMETERS = {
-        "listener_name": listener_name,
-        "status": status,
+        "posts": posts,
+        "error": error,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "queryListeningPostsReturn",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def saveListeningPost(
+    component: object,
+    definition=None,
+):
+    """Create or update one stopped persisted Listening Post definition."""
+    success = False
+    message = ""
+    post_id = ""
+
+    try:
+        post_id = (
+            await component
+            .listening_post_manager
+            .create_or_update(
+                definition
+                or {}
+            )
+        )
+
+        success = True
+        message = "Listening Post saved."
+
+    except Exception as exc:
+        message = str(
+            exc
+        )
+
+        component.logger.error(
+            f"Could not save Listening Post: {exc}"
+        )
+
+    PARAMETERS = {
+        "action": "save",
+        "post_id": post_id,
+        "success": success,
+        "message": message,
+        "posts": (
+            component
+            .listening_post_manager
+            .snapshot()
+        ),
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "listeningPostOperationReturn",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def startListeningPost(
+    component: object,
+    post_id="",
+):
+    """Start one persisted Listening Post on HIPRFISR."""
+    success = False
+    message = ""
+
+    post_id = str(
+        post_id
+        or ""
+    ).strip()
+
+    try:
+        await (
+            component
+            .listening_post_manager
+            .start(
+                post_id
+            )
+        )
+
+        success = True
+        message = "Listening Post started."
+
+    except Exception as exc:
+        message = str(
+            exc
+        )
+
+        component.logger.error(
+            f"Could not start Listening Post: {exc}"
+        )
+
+    PARAMETERS = {
+        "action": "start",
+        "post_id": post_id,
+        "success": success,
+        "message": message,
+        "posts": (
+            component
+            .listening_post_manager
+            .snapshot()
+        ),
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "listeningPostOperationReturn",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def stopListeningPost(
+    component: object,
+    post_id="",
+):
+    """Stop one running HIPRFISR Listening Post."""
+    success = False
+    message = ""
+
+    post_id = str(
+        post_id
+        or ""
+    ).strip()
+
+    try:
+        await (
+            component
+            .listening_post_manager
+            .stop(
+                post_id
+            )
+        )
+
+        success = True
+        message = "Listening Post stopped."
+
+    except Exception as exc:
+        message = str(
+            exc
+        )
+
+        component.logger.error(
+            f"Could not stop Listening Post: {exc}"
+        )
+
+    PARAMETERS = {
+        "action": "stop",
+        "post_id": post_id,
+        "success": success,
+        "message": message,
+        "posts": (
+            component
+            .listening_post_manager
+            .snapshot()
+        ),
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "listeningPostOperationReturn",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def clearListeningPostActivity(component: object, post_id=""):
+    """Clear one Listening Post's bounded Recent Activity buffer."""
+    success = False
+    message = ""
+    post_id = str(post_id or "").strip()
+
+    try:
+        await component.listening_post_manager.clear_activity(post_id)
+        success = True
+    except Exception as exc:
+        message = str(exc)
+        component.logger.error(f"Could not clear Listening Post activity: {exc}")
+
+    PARAMETERS = {
+        "action": "clear",
+        "post_id": post_id,
+        "success": success,
+        "message": message,
+        "posts": component.listening_post_manager.snapshot(),
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "enableDisableListenerReturn",
+        fissure.comms.MessageFields.MESSAGE_NAME: "listeningPostOperationReturn",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
+
     if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-async def deleteListener(component: object, listener_name=""):
-    """
-    Deletes an existing listener.
-    """
-    # Delete the Listener
-    if listener_name in component.alert_listeners:
-        # Stop and delete the listener
-        listener = component.alert_listeners[listener_name]
-        listener.disable()
-        del component.alert_listeners[listener_name]
-        component.logger.info(f"Listener '{listener_name}' deleted and stopped.")
-    else:
-        component.logger.error(f"No listener found with name '{listener_name}' to delete.")
+async def deleteListeningPost(
+    component: object,
+    post_id="",
+):
+    """Delete one stopped persisted Listening Post definition."""
+    success = False
+    message = ""
 
-    # Update Dashboard
-    PARAMETERS = {"listener_name": listener_name}
+    post_id = str(
+        post_id
+        or ""
+    ).strip()
+
+    try:
+        await (
+            component
+            .listening_post_manager
+            .delete(
+                post_id
+            )
+        )
+
+        success = True
+        message = "Listening Post removed."
+
+    except Exception as exc:
+        message = str(
+            exc
+        )
+
+        component.logger.error(
+            f"Could not remove Listening Post: {exc}"
+        )
+
+    PARAMETERS = {
+        "action": "delete",
+        "post_id": post_id,
+        "success": success,
+        "message": message,
+        "posts": (
+            component
+            .listening_post_manager
+            .snapshot()
+        ),
+    }
+
     msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "deleteListenerReturn",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "listeningPostOperationReturn",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
     }
+
     if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
 async def pingIP(component: object, node_uid: str):
@@ -398,6 +502,24 @@ async def pingIP(component: object, node_uid: str):
     if component.dashboard_connected:
         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
+
+async def newCoTLogSession(component: object):
+    """Start a fresh HIPRFISR CoT logging session."""
+    success, session_dir, error = component.new_cot_log_session()
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "newCoTLogSessionReturn",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "success": success,
+            "session_dir": session_dir,
+            "error": error,
+        },
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        
 
 ##########################################################################
 ###################### To Multiple Components ############################
@@ -531,6 +653,23 @@ async def findPreambles(component: object, window_min=0, window_max=0, ranking=0
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
     await component.backend_router.send_msg(fissure.comms.MessageTypes.COMMANDS, msg, target_ids=[component.pd_id])
+
+
+async def classifierLibraryMatch(component: object, request_id="", frequency_mhz=None, max_results=10):
+    """Run the Classifier library lookup on HIPRFISR and return ordered candidates."""
+    matches, error = fissure.utils.library.getFrequencyLookupCandidates(frequency_mhz, max_results)
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "classifierLibraryMatchReturn",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "request_id": str(request_id or ""),
+            "frequency_mhz": frequency_mhz,
+            "matches": matches,
+            "error": error,
+        },
+    }
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
 async def searchLibrary(component: object, soi_data="", field_data=""):
@@ -1297,211 +1436,6 @@ async def autorunPlaylistStop(component: object, node_uid=""):
     )
 
 
-async def physicalFuzzingStart(
-    component: object,
-    node_uid="",
-    fuzzing_variables=[],
-    fuzzing_type="",
-    fuzzing_min=0,
-    fuzzing_max=0,
-    fuzzing_update_period=0,
-    fuzzing_seed_step=0,
-):
-    """Command for starting physical fuzzing on a running flow graph."""
-    # Send Message to Sensor Node
-    PARAMETERS = {
-        "fuzzing_variables": fuzzing_variables,
-        "fuzzing_type": fuzzing_type,
-        "fuzzing_min": fuzzing_min,
-        "fuzzing_max": fuzzing_max,
-        "fuzzing_update_period": fuzzing_update_period,
-        "fuzzing_seed_step": fuzzing_seed_step,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "physicalFuzzingStart",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        component.logger.error(f"Could not resolve identity for sensor node UUID {node_uid}")
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
-async def physicalFuzzingStop(component: object, node_uid=""):
-    """Sends message to Sensor Node to stop the physical fuzzing thread being performed on a running flow graph."""
-    # Send Message to sensor_node,PD
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "physicalFuzzingStop",
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        component.logger.error(f"Could not resolve identity for sensor node UUID {node_uid}")
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
-async def multiStageAttackStart(
-    component: object,
-    node_uid="",
-    filenames=[],
-    variable_names=[],
-    variable_values=[],
-    durations=[],
-    repeat=False,
-    file_types=[],
-    autorun_index=0,
-    trigger_values=[]
-):
-    """
-    Sends message to Sensor Node/PD to start multi-stage attack.
-    """
-    # Send Message to Sensor Node
-    PARAMETERS = {
-        "filenames": filenames,
-        "variable_names": variable_names,
-        "variable_values": variable_values,
-        "durations": durations,
-        "repeat": repeat,
-        "file_types": file_types,
-        "autorun_index": autorun_index,
-        "trigger_values": trigger_values
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "multiStageAttackStart",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        component.logger.error(f"Could not resolve identity for sensor node UUID {node_uid}")
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
-async def multiStageAttackStop(component: object, node_uid="", autorun_index=0):
-    """
-    Sends message to Sensor Node/PD to stop multi-stage attack.
-    """
-    # Send Message to Sensor Node
-    PARAMETERS = {
-        "autorun_index": autorun_index,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "multiStageAttackStop",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        component.logger.error(f"Could not resolve identity for sensor node UUID {node_uid}")
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
-async def attackFlowGraphStop(component: object, node_uid="", parameter="", autorun_index=0):
-    """
-    Sends message to Sensor Node to stop a running attack flow graph.
-    """
-    # Send Message to Sensor Node
-    PARAMETERS = {
-        "parameter": parameter, 
-        "autorun_index": autorun_index
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "attackFlowGraphStop",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
-async def attackFlowGraphStart(
-    component: object,
-    node_uid="",
-    flow_graph_filepath="",
-    variable_names=[],
-    variable_values=[],
-    file_type="",
-    run_with_sudo=False,
-    autorun_index=0,
-    trigger_values=[]
-):
-    """Command for loading an attack."""
-    # Send Message to Sensor Node
-    PARAMETERS = {
-        "flow_graph_filepath": flow_graph_filepath,
-        "variable_names": variable_names,
-        "variable_values": variable_values,
-        "file_type": file_type,
-        "run_with_sudo": run_with_sudo,
-        "autorun_index": autorun_index,
-        "trigger_values": trigger_values
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "attackFlowGraphStart",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        return
-    
-    # Send through ROUTER
-    await component.sensor_node_router.send_msg(
-        fissure.comms.MessageTypes.COMMANDS,
-        msg,
-        target_ids=[identity]
-    )
-
-
 async def iqFlowGraphStart(
     component: object, node_uid="", flow_graph_filepath="", variable_names=[], variable_values=[], file_type=""
 ):
@@ -1619,55 +1553,127 @@ async def snifferFlowGraphStop(component: object, node_uid="", parameter=""):
     )
 
 
-async def startScapy(component: object, node_uid="", interface="", interval=0, loop=False, operating_system=""):
-    """
-    Signals to Sensor Node to start Scapy.
-    """
-    # Send Message
-    PARAMETERS = {
-        "interface": interface,
-        "interval": interval,
-        "loop": loop,
-        "operating_system": operating_system,
-    }
+async def refreshScapyInterfaces(component: object, node_uid=""):
+    """Ask one Sensor Node to enumerate its Scapy-visible interfaces."""
+    node_uid = str(node_uid or "").strip()
+
+    identity = component.nodes.get(node_uid, {}).get("identity", None)
+    if identity is None:
+        component.logger.error(
+            f"Could not resolve identity for sensor node UUID {node_uid}"
+        )
+        return
+
     msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "startScapy",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "refreshScapyInterfaces",
     }
 
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        return
-    
-    # Send through ROUTER
     await component.sensor_node_router.send_msg(
         fissure.comms.MessageTypes.COMMANDS,
         msg,
-        target_ids=[identity]
+        target_ids=[identity],
     )
 
 
-async def stopScapy(component: object, node_uid=""):
-    """Signals to Sensor Node to stop Scapy."""
-    # Send Message
+async def refreshScapyInterfacesResults(
+    component: object,
+    node_uid="",
+    interfaces=None,
+):
+    """Forward Sensor Node Scapy interface results to the Dashboard."""
     msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "stopScapy",  # ,
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "refreshScapyInterfacesResults",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "node_uid": str(node_uid or ""),
+            "interfaces": interfaces or [],
+        },
     }
 
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def startScapyTransmission(
+    component: object,
+    node_uid="",
+    operation_id="",
+    interface="",
+    method="",
+    interval=0.1,
+    count=1,
+    loop=False,
+    packet_hex="",
+):
+    """Forward a Scapy transmission request to one Sensor Node."""
+    node_uid = str(node_uid or "").strip()
+    identity = component.nodes.get(node_uid, {}).get("identity", None)
+
     if identity is None:
+        component.logger.error(
+            f"Could not resolve identity for sensor node UUID {node_uid}"
+        )
         return
-    
-    # Send through ROUTER
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "startScapyTransmission",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "operation_id": str(operation_id or ""),
+            "interface": str(interface or ""),
+            "method": str(method or ""),
+            "interval": float(interval),
+            "count": int(count),
+            "loop": bool(loop),
+            "packet_hex": str(packet_hex or ""),
+        },
+    }
+
     await component.sensor_node_router.send_msg(
         fissure.comms.MessageTypes.COMMANDS,
         msg,
-        target_ids=[identity]
-    )    
+        target_ids=[identity],
+    )
+
+
+async def scapyTransmissionStatus(
+    component: object,
+    node_uid="",
+    operation_id="",
+    state="",
+    message="",
+    packets_sent=0,
+    set_rate="",
+    started="",
+):
+    """Forward Scapy transmission state from a Sensor Node to the Dashboard."""
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "scapyTransmissionStatus",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "node_uid": str(node_uid or ""),
+            "operation_id": str(operation_id or ""),
+            "state": str(state or ""),
+            "message": str(message or ""),
+            "packets_sent": int(packets_sent or 0),
+            "set_rate": str(set_rate or ""),
+            "started": str(started or ""),
+        },
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
 async def setVariable(component: object, node_uid="", flow_graph="", variable="", value=""):
@@ -2409,6 +2415,8 @@ async def sensorNodeFileTransferStatus(
     component: object,
     uuid="",
     transfer_id="",
+    transfer_type="",
+    plugin_name="",
     success=False,
     message="",
     remote_filepath="",
@@ -2418,7 +2426,164 @@ async def sensorNodeFileTransferStatus(
     mib_per_second=0.0,
     refresh_file_list=False,
 ):
-    """Forward Sensor Node binary file-transfer completion to Dashboard."""
+    """
+    Handle Sensor Node binary-transfer completion.
+
+    Generic Dashboard file uploads keep their existing forwarding behavior.
+    HIPRFISR-originated plugin-package uploads are intercepted here and moved
+    into the plugin finalization lifecycle.
+    """
+    transfer_type = str(
+        transfer_type
+        or ""
+    ).strip()
+
+    if transfer_type == "plugin_package_upload":
+        deployments = (
+            _get_plugin_deployments(
+                component
+            )
+        )
+
+        deployment = deployments.get(
+            transfer_id
+        )
+
+        if not isinstance(
+            deployment,
+            dict,
+        ):
+            component.logger.warning(
+                "Ignoring plugin-package transfer status "
+                "for unknown transfer_id=%s",
+                transfer_id,
+            )
+            return
+
+        expected_node_uid = str(
+            deployment.get(
+                "node_uid",
+                "",
+            )
+            or ""
+        )
+        expected_plugin_name = str(
+            deployment.get(
+                "plugin_name",
+                "",
+            )
+            or ""
+        )
+
+        if (
+            uuid != expected_node_uid
+            or plugin_name != expected_plugin_name
+        ):
+            deployments.pop(
+                transfer_id,
+                None,
+            )
+
+            await _cancel_sensor_plugin_deployment(
+                component,
+                deployment,
+            )
+
+            await _send_plugin_deploy_result(
+                component,
+                node_uid=expected_node_uid,
+                plugin_name=expected_plugin_name,
+                transfer_id=transfer_id,
+                success=False,
+                status="Transfer Failed",
+                message=(
+                    "Plugin package transfer status "
+                    "did not match the pending deployment."
+                ),
+            )
+            return
+
+        if not success:
+            deployments.pop(
+                transfer_id,
+                None,
+            )
+
+            await _cancel_sensor_plugin_deployment(
+                component,
+                deployment,
+            )
+
+            await _send_plugin_deploy_result(
+                component,
+                node_uid=expected_node_uid,
+                plugin_name=expected_plugin_name,
+                transfer_id=transfer_id,
+                success=False,
+                status="Transfer Failed",
+                message=str(
+                    message
+                    or "Plugin package transfer failed."
+                ),
+            )
+            return
+
+        node = (
+            (component.nodes or {})
+            .get(
+                expected_node_uid,
+                {},
+            )
+            or {}
+        )
+        identity = node.get(
+            "identity"
+        )
+
+        if identity is None:
+            deployments.pop(
+                transfer_id,
+                None,
+            )
+
+            await _send_plugin_deploy_result(
+                component,
+                node_uid=expected_node_uid,
+                plugin_name=expected_plugin_name,
+                transfer_id=transfer_id,
+                success=False,
+                status="Failed",
+                message=(
+                    "Sensor Node disconnected after "
+                    "receiving the plugin package."
+                ),
+            )
+            return
+
+        PARAMETERS = {
+            "plugin_name":
+                expected_plugin_name,
+            "transfer_id":
+                transfer_id,
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                component.identifier,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "finalizePluginDeployment",
+            fissure.comms.MessageFields.PARAMETERS:
+                PARAMETERS,
+        }
+
+        await component.sensor_node_router.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+            target_ids=[
+                identity
+            ],
+        )
+        return
+
     parameters = {
         "node_uid": uuid,
         "transfer_id": transfer_id,
@@ -2433,9 +2598,12 @@ async def sensorNodeFileTransferStatus(
     }
 
     msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "sensorNodeFileTransferStatus",
-        fissure.comms.MessageFields.PARAMETERS: parameters,
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "sensorNodeFileTransferStatus",
+        fissure.comms.MessageFields.PARAMETERS:
+            parameters,
     }
 
     if component.dashboard_connected:
@@ -2467,6 +2635,57 @@ async def refreshSensorNodeFilesResults(
         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
+async def refreshSensorNodeActivityResults(
+    component: object,
+    node_uid="",
+    operations=None,
+    log_entries=None,
+):
+    """Forward one Sensor Node Activity snapshot to the Dashboard."""
+    PARAMETERS = {
+        "node_uid": node_uid,
+        "operations": operations or [],
+        "log_entries": log_entries or [],
+    }
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshSensorNodeActivityResults",
+        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+async def refreshSensorNodeActivity(component: object, node_uid="", log_limit=100):
+    """Request one bounded Activity snapshot from an IP/local Sensor Node."""
+    node = (component.nodes or {}).get(node_uid, {}) or {}
+    identity = node.get("identity")
+
+    if identity is None:
+        component.logger.warning(
+            f"Could not refresh Sensor Node Activity; no identity for {node_uid}."
+        )
+        return
+
+    PARAMETERS = {
+        "log_limit": log_limit,
+    }
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshSensorNodeActivity",
+        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+    }
+    await component.sensor_node_router.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+        target_ids=[identity],
+    )
+
+
 async def flowGraphError(component: object, node_uid="", error=""):
     """
     Forwards the flow graph error message to the Dashboard.
@@ -2479,19 +2698,6 @@ async def flowGraphError(component: object, node_uid="", error=""):
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
         fissure.comms.MessageFields.MESSAGE_NAME: "flowGraphError",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def multiStageAttackFinished(component: object, node_uid=""):
-    """
-    Forwards the multi-stage attack finished message to the Dashboard.
-    """
-    # Send the Message
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "multiStageAttackFinished",
     }
     if component.dashboard_connected:
         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
@@ -2594,10 +2800,17 @@ async def flowGraphStarted(component: object, node_uid="", category=""):
 
 async def recallSettingsReturn(component: object, uuid, settings_dict):
     """
-    Returns the recalled sensor node settings to the Dashboard.
+    Returns recalled Sensor Node settings and caches them for hub-side capability checks.
     """
+    node = component.nodes.get(uuid)
+    if node is None:
+        component.logger.warning(f"recallSettingsReturn received unknown node uuid={uuid}")
+        return
+
+    node["settings"] = dict(settings_dict) if isinstance(settings_dict, dict) else {}
+
     # Get the IP
-    get_node_ip = component.nodes[uuid].get("ip", None)
+    get_node_ip = node.get("ip", None)
 
     # Send the Message
     PARAMETERS = {
@@ -2732,37 +2945,37 @@ async def findGPS_CoordinatesResults(component: object, coordinates=""):
         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
-async def alertReturn(component: object, node_uid="", alert_text=""):
-    """
-    Forwards alertReturn Message to the Dashboard.
-    """
-    # # Classify Signals by Frequency
-    # classification_summary = fissure.utils.library.classifyFrequencyFromTextDirect(alert_text, False)
-    # if classification_summary:
-    #     alert_text = f"{alert_text}\n{classification_summary}"
-    # component.logger.info(alert_text)  # TODO: Provide cleaned up console text for alerts
+async def inspectionReturn(
+    component: object,
+    node_uid: str = "",
+    operation_id: str = "",
+    inspection: dict = None,
+    final: bool = True,
+    timestamp: str = "",
+):
+    """Forward one structured Inspection result from a Sensor Node."""
+    if not isinstance(inspection, dict):
+        component.logger.error("inspectionReturn requires an inspection dictionary.")
+        return
 
-    # Get Nickname
-    node_record = component.nodes.get(node_uid, {})
-    node_nickname = (
-        node_record.get("nickname")
-        or node_record.get("settings", {}).get("Sensor Node", {}).get("nickname")
-        or ""
-    )
+    if not component.dashboard_connected:
+        return
 
-    # Forward to Dashboard
-    PARAMETERS = {
-        "node_uid": node_uid,
-        "node_nickname": node_nickname,
-        "alert_text": alert_text,
-    }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "alertReturn",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        fissure.comms.MessageFields.MESSAGE_NAME: "inspectionReturn",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "node_uid": str(node_uid or ""),
+            "operation_id": str(operation_id or ""),
+            "inspection": dict(inspection),
+            "final": bool(final),
+            "timestamp": str(timestamp or ""),
+        },
     }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    await component.dashboard_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
 
 
 async def detectionReturn(
@@ -2808,6 +3021,9 @@ async def detectionReturn(
         detection["opid"] = operation_id
         detection.setdefault("operation_id", operation_id)
 
+    location_valid = detection.get("location_valid")
+    allow_location_fallback = location_valid is not False
+
     if lat is None:
         lat = detection.get("latitude")
     if lat is None:
@@ -2827,16 +3043,21 @@ async def detectionReturn(
     if alt is None:
         alt = detection.get("hae")
 
-    node_record = {}
-    if node_uid:
-        node_record = (getattr(component, "nodes", {}) or {}).get(node_uid, {}) or {}
+    if not allow_location_fallback:
+        lat = None
+        lon = None
+        alt = None
+    else:
+        node_record = {}
+        if node_uid:
+            node_record = (getattr(component, "nodes", {}) or {}).get(node_uid, {}) or {}
 
-    if lat is None:
-        lat = node_record.get("lat")
-    if lon is None:
-        lon = node_record.get("lon")
-    if alt is None:
-        alt = node_record.get("alt")
+        if lat is None:
+            lat = node_record.get("lat")
+        if lon is None:
+            lon = node_record.get("lon")
+        if alt is None:
+            alt = node_record.get("alt")
 
     if lat is not None:
         detection.setdefault("latitude", lat)
@@ -2882,21 +3103,22 @@ async def detectionReturn(
         "tak_icon": "r-x-fissure-detection",
     }
 
-    try:
-        out = maybe_ingest_detection_for_geolocation(component, payload)
-        if out is not None:
-            target_id, patch, history_entry = out
-            await targetPatch(
-                component,
-                target_id=target_id,
-                patch=patch,
-                history_entry=history_entry,
-                artifact_id="",
+    if allow_location_fallback and lat is not None and lon is not None:
+        try:
+            out = maybe_ingest_detection_for_geolocation(component, payload)
+            if out is not None:
+                target_id, patch, history_entry = out
+                await targetPatch(
+                    component,
+                    target_id=target_id,
+                    patch=patch,
+                    history_entry=history_entry,
+                    artifact_id="",
+                )
+        except Exception as exc:
+            component.logger.error(
+                f"detectionReturn geolocation ingest error: {exc}"
             )
-    except Exception as exc:
-        component.logger.error(
-            f"detectionReturn geolocation ingest error: {exc}"
-        )
 
     if component.dashboard_connected:
         dashboard_msg = {
@@ -2912,10 +3134,11 @@ async def detectionReturn(
             dashboard_msg,
         )
 
-    await fissure.utils.tak_messages.send(
-        component,
-        payload,
-    )
+    if allow_location_fallback and lat is not None and lon is not None:
+        await fissure.utils.tak_messages.send(
+            component,
+            payload,
+        )
 
 
 #######################################
@@ -3036,40 +3259,22 @@ async def takReturn(component, payload: dict):
 
 
 def maybe_ingest_detection_for_geolocation(component, payload: dict):
-    """
-    Inspect a TAK event payload. If it is a target-associated detection with usable
-    position + power information, feed it into hub multilateration and return
-    a target patch when a location estimate is available.
-
-    Returns:
-        (target_id, patch, history_entry) or None
-    """
-    if not isinstance(payload, dict):
-        return None
-
-    if payload.get("msg_type") != "event":
+    """Feed target-associated detector observations into the hub geolocation session."""
+    if not isinstance(payload, dict) or payload.get("msg_type") != "event":
         return None
 
     data = payload.get("data") or {}
-    if not isinstance(data, dict):
-        return None
-
-    if data.get("event_type") != "detection":
+    if not isinstance(data, dict) or data.get("event_type") != "detection":
         return None
 
     target_id = str(data.get("target_id") or "").strip()
     if not target_id:
         return None
 
-    power_dbm = data.get("power_dbm")
-    if power_dbm in (None, ""):
-        return None
-
     lat = payload.get("lat")
     lon = payload.get("lon")
     alt = payload.get("alt")
     observation_time = payload.get("time")
-
     if lat in (None, "") or lon in (None, ""):
         return None
 
@@ -3083,6 +3288,67 @@ def maybe_ingest_detection_for_geolocation(component, payload: dict):
         frequency_hz = None
 
     node_uid = str(data.get("node_uid") or "").strip()
+    metric_units = str(data.get("metric_units") or data.get("measurement_units") or "").strip()
+    path_loss_n = 2.2
+    path_loss_p0_db = -40.0
+    allow_solve = True
+
+    try:
+        power_dbfs_peak = data.get("power_dbfs_peak")
+        if power_dbfs_peak not in (None, ""):
+            measurement_db = float(power_dbfs_peak)
+            measurement_units = "dBFS"
+            path_loss_n = float(data.get("path_loss_n", 2.2))
+            p0_value = data.get("path_loss_p0_db")
+            allow_solve = p0_value not in (None, "")
+            if allow_solve:
+                path_loss_p0_db = float(p0_value)
+
+        elif metric_units.lower() == "dbfs":
+            metric = data.get("metric")
+            if metric in (None, ""):
+                return None
+            measurement_db = float(metric)
+            measurement_units = "dBFS"
+            path_loss_n = float(data.get("path_loss_n", 2.2))
+            p0_value = data.get("path_loss_p0_db")
+            allow_solve = p0_value not in (None, "")
+            if allow_solve:
+                path_loss_p0_db = float(p0_value)
+
+        elif metric_units == "matched_filter_power":
+            metric = data.get("metric")
+            if metric in (None, ""):
+                metric = data.get("power_dbm")
+            metric = float(metric)
+            if metric <= 0.0:
+                return None
+            measurement_db = 10.0 * math.log10(metric)
+            measurement_units = "matched_filter_dB"
+            path_loss_n = float(data.get("path_loss_n", 2.2))
+            allow_solve = False
+            if data.get("path_loss_p0_db") not in (None, ""):
+                component.logger.warning(
+                    f"Ignoring path_loss_p0_db for legacy matched-filter measurement target_id={target_id}; use power_dbfs_peak instead."
+                )
+
+        else:
+            measurement = data.get("rssi_dbm")
+            if measurement in (None, ""):
+                measurement = data.get("power_dbm")
+            if measurement in (None, ""):
+                measurement = data.get("measurement_db")
+            if measurement in (None, ""):
+                return None
+            measurement_db = float(measurement)
+            measurement_units = metric_units or "dBm"
+            path_loss_n = float(data.get("path_loss_n", 2.2))
+            if data.get("path_loss_p0_db") not in (None, ""):
+                path_loss_p0_db = float(data.get("path_loss_p0_db"))
+
+    except Exception as exc:
+        component.logger.warning(f"Invalid geolocation measurement for target_id={target_id}: {exc}")
+        return None
 
     try:
         est_out = _fissure_geo_process_measurement(
@@ -3092,84 +3358,51 @@ def maybe_ingest_detection_for_geolocation(component, payload: dict):
             node_uid=node_uid,
             lat=float(lat),
             lon=float(lon),
-            rssi_db=float(power_dbm),
+            rssi_db=measurement_db,
             observation_time=observation_time,
+            path_loss_n=path_loss_n,
+            path_loss_p0_db=path_loss_p0_db,
+            measurement_units=measurement_units,
+            allow_solve=allow_solve,
         )
-    except Exception as e:
-        component.logger.error(
-            f"Detection geolocation ingest failed for target_id={target_id}: {e}"
-        )
+    except Exception as exc:
+        component.logger.error(f"Detection geolocation ingest failed for target_id={target_id}: {exc}")
         return None
 
     if est_out is None:
         return None
 
     est_lat, est_lon, ce_m = est_out
-
     ts_iso = observation_time
     if not isinstance(ts_iso, str) or not ts_iso:
         ts_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
         ts_iso = ts_iso.replace(" ", "T")
 
-    patch = {
-        "location": {
-            "lat": float(est_lat),
-            "lon": float(est_lon),
-            "hae_m": float(alt or 0.0),
-            "ce_m": float(ce_m),
-            "timestamp": ts_iso,
-            "source": "hiprfisr_multilateration",
-        },
-        "state": "tracking",
+    location_patch = {
+        "lat": float(est_lat),
+        "lon": float(est_lon),
+        "hae_m": float(alt or 0.0),
+        "timestamp": ts_iso,
+        "source": "hiprfisr_multilateration",
     }
+    if ce_m is not None:
+        location_patch["ce_m"] = float(ce_m)
 
+    patch = {"location": location_patch, "state": "tracking"}
+    target = (getattr(component, "targets", {}) or {}).get(target_id) or {}
+    geo = target.get("geolocate") or {}
     history_entry = {
         "event": "multilateration_update_from_detection",
         "detector": data.get("detector", ""),
         "node_uid": node_uid,
+        "sample_count": geo.get("sample_count"),
+        "unique_node_count": geo.get("unique_node_count"),
+        "unique_position_count": geo.get("unique_position_count"),
+        "spread_m": geo.get("spread_m"),
+        "geometry_quality": geo.get("geometry_quality", ""),
     }
-
     return target_id, patch, history_entry
-
-
-async def exploit(component: object, node_uid: str, protocol:str, modulation:str, hardware:str, type:str, attack:str, variables:str):
-    """"
-    Forwards the necessary information to the proper exploit flow graph.
-    """
-    PARAMETERS = {
-        "node_uid": node_uid,
-        "protocol": protocol,
-        "modulation": modulation,
-        "hardware": hardware,
-        "type": type,
-        "attack": attack,
-        "variables": variables,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "exploitReturn",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def snreport(component: object, node_uid:str, text:str):
-    """"
-    Forwards the necessary information to the proper exploit flow graph.
-    """
-    PARAMETERS = {
-        "node_uid": node_uid,
-        "text": text,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "snreport",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
 async def gpsBeaconEnableDisableIP_Return(component: object, gps_tak_beacon_status: bool):
@@ -3423,890 +3656,1011 @@ async def setHeartbeatInterval(component: object, interval=0):
     # )
 
 
-async def checkPlugin(component: object, node_uid: str):  #TODO: fix remote/local check
-    """Check Status of Plugins on Sensor Node
+async def refreshPluginInventory(component: object, node_uid=""):
+    """Request the selected Sensor Node plugin inventory."""
+    node_uid = str(node_uid or "").strip()
+    hub_inventory = plugin.get_local_plugin_inventory()
 
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str, optional
-        Sensor node UID
-    """
-    # Get plugin names
-    plugin_names = plugin.get_local_plugin_names()
+    node = (component.nodes or {}).get(node_uid, {}) or {}
+    identity = node.get("identity")
 
-    if node_uid:
-        # Forward message to sensor node
+    if not node_uid or identity is None:
         PARAMETERS = {
             "node_uid": node_uid,
-            "plugin_names": plugin_names
+            "hub_inventory": hub_inventory,
+            "node_inventory": {},
+            "error": "Selected Sensor Node is unavailable.",
         }
         msg = {
             fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "checkPlugin",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-        }
-
-        # Resolve Identity
-        identity = component.nodes[node_uid].get("identity", None)
-        if identity is None:
-            return
-            
-        # Send through ROUTER
-        await component.sensor_node_router.send_msg(
-            fissure.comms.MessageTypes.COMMANDS,
-            msg,
-            target_ids=[identity]
-        )
-
-    # Sensor node is local to HIPRFISR
-    else:
-        # Get status; deployed is N/A as it is local
-        status = {}
-        run_db_install = False
-        uninstall_plugins = []
-        for plugin_name in plugin_names:
-            # Check if installed
-            installed = plugin.installed(plugin_name)
-
-            # Create status entry
-            status[plugin_name] = {
-                'deployed': 'N/A',
-                'installed': installed
-            }
-
-            if installed and (not plugin_name in component.local_plugins):
-                # Plugin is installed on sensor node but not registered in HIPRFISR; register for installation
-                run_db_install = True
-                await registerPlugin(component, -1, plugin_name)
-
-            elif (not installed) and (plugin_name in component.local_plugins):
-                # Plugin is not installed on sensor node but is registered in hipfisr; deregister and remove from database
-                uninstall_plugins += [plugin_name]
-                await deregisterPlugin(component, -1, plugin_name)
-
-        if len(uninstall_plugins) > 0:
-            # Uninstall plugins from database
-            await uninstallPluginsDatabase(component, -1, uninstall_plugins)
-        if run_db_install:
-            # Install plugins to database
-            await installPluginsDatabase(component, -1, True)
-
-        # return status
-        PARAMETERS = {
-            "plugin_status": status,
-        }
-        msg = {
-            fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "checkSensorNodePluginResults",
+            fissure.comms.MessageFields.MESSAGE_NAME: "refreshPluginInventoryResults",
             fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
         }
         if component.dashboard_connected:
-            await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def checkSensorNodePluginResults(component: object, node_uid: str, plugin_status: dict):
-    """Handle checkPlugin Response from Sensor Node
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str, optional
-        Sensor node UID
-    plugin_status : dict
-        Status (values) of plugins (keys)
-    """
-    pass  # TODO: replace component.sensor_nodes
-
-    # # Align database to sensor node
-    # run_db_install = False
-    # uninstall_plugins = []
-    # for plugin_name in plugin_status.keys():
-    #     installed = plugin_status.get(plugin_name).get('installed')
-    #     if installed and (not plugin_name in component.sensor_nodes[sensor_node_id].plugins):
-    #         # Plugin is installed on sensor node but not registered in hipfisr; register for installation
-    #         run_db_install = True
-    #         await registerPlugin(component, sensor_node_id, plugin_name)
-
-    #     elif (not installed) and (plugin_name in component.sensor_nodes[sensor_node_id].plugins):
-    #         # Plugin is not installed on sensor node but is registered in hipfisr; deregister and remove from database
-    #         uninstall_plugins += [plugin_name]
-    #         await deregisterPlugin(component, sensor_node_id, plugin_name)
-
-    # if len(uninstall_plugins) > 0:
-    #     # Uninstall plugins from database
-    #     await uninstallPluginsDatabase(component, sensor_node_id, uninstall_plugins)
-    # if run_db_install:
-    #     # Install plugins to database
-    #     await installPluginsDatabase(component, sensor_node_id, True)
-
-    # # Forward results to Dashboard
-    # PARAMETERS = {
-    #     "plugin_status": plugin_status,
-    # }
-    # msg = {
-    #     fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-    #     fissure.comms.MessageFields.MESSAGE_NAME: "checkSensorNodePluginResults",
-    #     fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    # }
-    # if component.dashboard_connected:
-        # await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def savePlugin(component: object, plugin_name: str, plugin_data: str):
-    """Save Plugin to Local HIPRFISR
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_name : str
-        Plugin name
-    plugin_data : str
-        Plugin data in hex format (compressed as a zip file)
-    """
-    # Decode hex data
-    plugin_data = binascii.a2b_hex(plugin_data)
-
-    # Save file
-    pathname = os.path.join(fissure.utils.PLUGIN_DIR, plugin_name + '.zip')
-    with open(pathname, "wb") as f:
-        f.write(plugin_data)
-
-    # Create a path for the plugin to be extracted to
-    extract_path = os.path.join(fissure.utils.PLUGIN_DIR, plugin_name)
-    if os.path.exists(extract_path):
-        copy_num = 1
-        base_name = plugin_name
-        while os.path.exists(extract_path):
-            extract_path = os.path.join(fissure.utils.PLUGIN_DIR, f"{base_name} (Copy {copy_num})")
-            copy_num += 1
-    os.makedirs(extract_path, exist_ok=True)
-
-    # Extract the zip file to the plugin directory
-    with zipfile.ZipFile(pathname, "r") as zip_ref:
-        zip_ref.extractall(extract_path)
-
-    # Remove the zip file
-    os.remove(pathname)
-
-
-async def sendPlugin(component: object, plugin_name: str) -> None:
-    """Send Plugin to Dashboard
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_name : str
-        Plugin name
-    """
-    plugin_path = os.path.join(fissure.utils.PLUGIN_DIR, plugin_name)
-    if not os.path.exists(plugin_path):
-        component.logger.error(f"Plugin {plugin_name} does not exist in {fissure.utils.PLUGIN_DIR}")
+            await component.dashboard_socket.send_msg(
+                fissure.comms.MessageTypes.COMMANDS,
+                msg,
+            )
         return
 
-    # Create a temporary zip file for the plugin directory
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_zip:
-        with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(plugin_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, plugin_path)
-                    zipf.write(file_path, arcname)
-        with open(temp_zip.name, "rb") as f:
-            zip_data = f.read()
-        hex_zip_data = binascii.hexlify(zip_data).decode("utf-8").upper()
-
-    # Send the plugin to the dashboard
-    PARAMETERS = {
-        "plugin_name": plugin_name,
-        "plugin_data": hex_zip_data,
-    }
+    PARAMETERS = {}
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "savePlugin",
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshPluginInventory",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-async def transferPlugins(component: object, node_uid: str, plugin_names: List[str], install: bool=False):
-    """Send Plugin to Sensor Node
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_names : str
-        Plugin names with file extension or no extension if folder
-    install : bool
-        Install plugin after transfer
-    """
-    plugins = []
-    for plugin_name in plugin_names:
-        pathname = os.path.join(fissure.utils.PLUGIN_DIR, plugin_name)
-        if os.path.exists(pathname):
-            zip_filename = None
-
-            if not os.path.isfile(pathname):
-                # zip directory
-                shutil.make_archive(pathname, "zip", pathname)
-                zip_filename = filename = pathname + ".zip"
-                plugin_name += '.zip'
-            else:
-                filename = pathname
-
-            # Read file
-            try:
-                with open(filename, "rb") as f:
-                    plugin_data = f.read()
-                plugin_data = binascii.hexlify(plugin_data)
-                plugin_data = plugin_data.decode("utf-8").upper()
-            except:
-                component.logger.error("Error reading file: " + str(filename))
-                return
-            
-            # Append to plugin data
-            plugins += [(plugin_name, plugin_data)]
-
-            # Delete the .zip File
-            if not zip_filename is None:
-                os.system('rm "' + zip_filename + '"')
-
-    # Send File
-    PARAMETERS = {
-        "node_uid": node_uid,
-        "plugins": plugins,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-        fissure.comms.MessageFields.MESSAGE_NAME: "transferPlugins" if not install else "transferPluginsInstall",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        return
-    
-    # Send through ROUTER
     await component.sensor_node_router.send_msg(
         fissure.comms.MessageTypes.COMMANDS,
         msg,
-        target_ids=[identity]
+        target_ids=[identity],
     )
 
 
-async def installPlugins(component: object, node_uid: str, plugin_names: List[str]):  # TODO fix local/remote check
-    """Install Plugins to Sensor Node
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_names : List[str]
-        Plugin names
-    """
-    if node_uid:
-        # Install through sensor node
-        PARAMETERS = {
-            "plugin_names": plugin_names,
-        }
-        msg = {
-            fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "installPlugins",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-        }
-
-        # Resolve Identity
-        identity = component.nodes[node_uid].get("identity", None)
-        if identity is None:
-            return
-        
-        # Send through ROUTER
-        await component.sensor_node_router.send_msg(
-            fissure.comms.MessageTypes.COMMANDS,
-            msg,
-            target_ids=[identity]
-        )        
-
-    else:
-        # Install Locally
-        for plugin_name in plugin_names:
-            # Run Installation
-            plugin.install(plugin_name)
-
-            # Register in HIPRFISR
-            await registerPlugin(component, -1, plugin_name)
-
-        # Install to Database
-        await installPluginsDatabase(component, -1, True)
-
-
-async def registerPlugin(component: object, node_uid: str, plugin_name: str):
-    """Register Plugin in HIPRFISR Sensor Node Plugin List
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_name : str
-        Plugin name
-    """
-    pass  # TODO: replace component.sensor_nodes
-    
-    # if sensor_node_id > -1:
-    #     if not plugin_name in component.sensor_nodes[sensor_node_id].plugins:
-    #         # Add plugin to list for sensor node
-    #         component.sensor_nodes[sensor_node_id].plugins += [plugin_name]
-    # else:
-    #     if not plugin_name in component.local_plugins:
-    #         # Add plugin to list for hiprfisr
-    #         component.local_plugins += [plugin_name]
-
-
-async def deregisterPlugin(component: object, node_uid: str, plugin_name: str):
-    """Remove Plugin from HIPRFISR Sensor Node Plugin List
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_name : str
-        Plugin name
-    """
-    pass  # TODO: replace component.sensor_nodes
-
-    # if sensor_node_id > -1:
-    #     if plugin_name in component.sensor_nodes[sensor_node_id].plugins:
-    #         # Remove plugin from list for sensor node
-    #         component.sensor_nodes[sensor_node_id].plugins.remove(plugin_name)
-    # else:
-    #     if plugin_name in component.local_plugins:
-    #         # Remove plugin from list for hiprfisr
-    #         component.local_plugins.remove(plugin_name)
-
-
-async def installPluginsDatabase(component: object, node_uid: str, refresh_frontend_widgets: bool=True):
-    """Install Plugin in Database
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    refresh_frontend_widgets : bool, optional
-        Update dashboard UI widgets after installation, by default True
-    """
-    pass  # TODO: replace component.sensor_nodes
-
-    # # Get registered active plugins list
-    # if sensor_node_id > -1:
-    #     plugins = component.sensor_nodes[sensor_node_id].plugins
-    # else:
-    #     plugins = component.local_plugins
-
-    # # Install plugins to database
-    # plugin.modify_database(component.logger, plugins, 'add')
-
-    # # Update database cache and dashboard
-    # await retrieveDatabaseCache(component, refresh_frontend_widgets)
-
-    # # Update plugin table list
-    # await checkPlugin(component, sensor_node_id)
-
-
-async def uninstallPluginsDatabase(component: object, node_uid: str, plugin_names: List[str]):
-    """Uninstall Plugin from Database
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_names : List[str]
-        Plugin names
-    """
-    # Uninstall plugins from database
-    plugin.modify_database(component.logger, plugin_names, 'remove')
-
-    # Update database cache and dashboard
-    await retrieveDatabaseCache(component, True)
-
-    # Update plugin table\list
-    await checkPlugin(component, node_uid)
-
-
-async def requestPluginsTransferInstall(component: object, node_uid: str, plugin_names: str):
-    """Sensor Node Request for Plugin Transfer then Install
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_names : str
-        Plugin name
-    """
+async def refreshPluginInventoryResults(
+    component: object,
+    node_uid="",
+    node_inventory=None,
+):
+    """Combine Hub and Sensor Node plugin inventories and return them to the Dashboard."""
     PARAMETERS = {
         "node_uid": node_uid,
-        "plugin_names": plugin_names
+        "hub_inventory": plugin.get_local_plugin_inventory(),
+        "node_inventory": node_inventory or {},
+        "error": "",
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "requestPluginsTransferInstall",
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshPluginInventoryResults",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
     if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-async def uninstallPlugins(component: object, node_uid: str, plugin_names: str):  #TODO: fix local/remote check
-    """Uninstall Plugins from Sensor Node
+async def repairPluginSetup(component: object, node_uid="", plugin_name=""):
+    """Request setup repair for one plugin on the selected Sensor Node."""
+    node_uid = str(node_uid or "").strip()
+    plugin_name = str(plugin_name or "").strip()
 
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_names : str
-        Plugin names
-    """
-    if node_uid > -1:
-        # Uninstall through sensor node
+    node = (component.nodes or {}).get(node_uid, {}) or {}
+    identity = node.get("identity")
+
+    if not node_uid or identity is None:
         PARAMETERS = {
-            "plugin_names": plugin_names,
+            "node_uid": node_uid,
+            "plugin_name": plugin_name,
+            "success": False,
+            "status": "Failed",
+            "message": "Selected Sensor Node is unavailable.",
+            "output": "",
         }
         msg = {
             fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "uninstallPlugins",
+            fissure.comms.MessageFields.MESSAGE_NAME: "repairPluginSetupResults",
             fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
         }
+        if component.dashboard_connected:
+            await component.dashboard_socket.send_msg(
+                fissure.comms.MessageTypes.COMMANDS,
+                msg,
+            )
+        return
 
-        # Resolve Identity
-        identity = component.nodes[node_uid].get("identity", None)
-        if identity is None:
-            return
-        
-        # Send through ROUTER
-        await component.sensor_node_router.send_msg(
-            fissure.comms.MessageTypes.COMMANDS,
-            msg,
-            target_ids=[identity]
-        )
-    
-    else:
-        # Uninstall locally
-        for plugin_name in plugin_names:
-            # run uninstallation
-            plugin.uninstall(plugin_name)
-
-        # Update database and dashboard
-        await uninstallPluginsDatabase(component, -1, plugin_names)
-
-
-async def removePlugin(component: object, node_uid: str, plugin_name: str):
-    """Remove Plugin from Sensor Node
-
-    **WARNING**: This will remove the plugin from the sensor node file system
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_name : str
-        Plugin name
-    """
     PARAMETERS = {
-        "node_uid": node_uid,
         "plugin_name": plugin_name,
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "removePlugin",
+        fissure.comms.MessageFields.MESSAGE_NAME: "repairPluginSetup",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
-
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
-    if identity is None:
-        return
-    
-    # Send through ROUTER
     await component.sensor_node_router.send_msg(
         fissure.comms.MessageTypes.COMMANDS,
         msg,
-        target_ids=[identity]
-    )    
-    
-
-# async def requestPluginNamesHiprfisr(component: object):
-#     """Handle Request for Plugin Names
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     """
-#     PARAMETERS = {
-#         "plugin_names": plugin.get_local_plugin_names(),
-#     }
-#     msg = {
-#         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-#         fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginNamesHiprfisr",
-#         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-#     }
-#     if component.dashboard_connected:
-#         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        target_ids=[identity],
+    )
 
 
-# async def openPluginHiprfisr(component: object, plugin_name: str):
-#     """Handle Request for Plugin Names
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     """
-#     # Read the Files
-#     component.openPluginEditor(plugin_name)
-
-#     # Return the Table Data
-#     PARAMETERS = {
-#         "plugin_name": component.plugin_editor.name,
-#         "table_data_json": component.plugin_editor.table_data,
-#         "install_files": component.plugin_editor.install_files,
-#     }
-#     msg = {
-#         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-#         fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginTableData",
-#         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-#     }
-#     if component.dashboard_connected:
-#         await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-# async def closePluginHiprfisr(component: object):
-#     """Handle Request for Plugin Names
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     """
-#     component.plugin_editor = None
-
-
-# async def pluginDelete(component: object, plugin_name: str, delete_from_library: bool):
-#     """
-#     Deletes a plugin folder and library/database files (optional).
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     delete_from_library : bool
-#         Delete from database in addition to plugin folder
-#     """
-#     component.openPluginEditor(plugin_name)
-#     component.plugin_editor.deletePlugin(plugin_name, delete_from_library, component.os_info)
-#     component.plugin_editor = None
-
-#     # Update the Combobox of Plugins
-#     await requestPluginNamesHiprfisr(component)
-
-#     # Send Message to Dashboard to Update Library
-#     await retrieveDatabaseCache(component, True)
-
-
-# async def pluginApplyChanges(component: object, table_data_json: dict, supporting_files_data_json: dict):
-#     """Handle Request for Plugin Names
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     table_data_json : dict
-#         Tables data from Plugin Editor tab
-#     supporting_files_data_json : dict
-#         Supporting Files data from Plugin Editor tab
-#     """
-#     component.plugin_editor.applyChanges(table_data_json, supporting_files_data_json, component.os_info)
-
-#     # Send Message to Dashboard to Update Library
-#     await retrieveDatabaseCache(component, True)
-    
-
-async def pluginAddProtocolHiprfisr(component: object, protocol_name: str):
-    """Handle Request to Add Protocol Plugin Names
-
-    Parameters
-    ----------
-    component : object
-        Component
-    """
-    #component.pluginAddProtocolHiprfisr(protocol_name)
-
-    # run add and get returned parameters
+async def repairPluginSetupResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    node_inventory=None,
+):
+    """Forward one Sensor Node setup-repair result to the Dashboard."""
     PARAMETERS = {
-        "plugin_name": component.plugin_editor.name,
-        "protocol_name": protocol_name,
-        "parameters": component.pluginAddProtocolHiprfisr(protocol_name)
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginProtocolParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def pluginSetProtocolParameters(component: object, protocol_name: str, parameters: dict):
-    component.plugin_editor.edit_protocol(protocol_name, parameters.get('data_rates'), parameters.get('median_packet_lengths'))
-
-    # run add and get returned parameters
-    PARAMETERS = {
-        "plugin_name": component.plugin_editor.name,
-        "protocol_name": protocol_name,
-        "parameters": component.pluginAddProtocolHiprfisr(protocol_name)
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginProtocolParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def pluginAddProtocolModType(component: object, protocol_name: str, mod_type: str):
-    component.plugin_editor.add_mod_type(protocol_name, mod_type)
-
-    # run add and get returned parameters
-    PARAMETERS = {
-        "plugin_name": component.plugin_editor.name,
-        "protocol_name": protocol_name,
-        "parameters": component.plugin_editor.get_protocol_parameters(protocol_name)
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginProtocolParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def pluginRemoveProtocolModTypes(component: object, protocol_name: str, mod_types: str):
-    component.plugin_editor.remove_mod_types(protocol_name, mod_types)
-
-    # run add and get returned parameters
-    PARAMETERS = {
-        "plugin_name": component.plugin_editor.name,
-        "protocol_name": protocol_name,
-        "parameters": component.plugin_editor.get_protocol_parameters(protocol_name)
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginProtocolParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def pluginEditProtocolPktTypes(component: object, protocol_name: str, pkt_types: List[List[str]]):
-    component.plugin_editor.edit_pkt_types(protocol_name, pkt_types)
-
-    # run add and get returned parameters
-    PARAMETERS = {
-        "plugin_name": component.plugin_editor.name,
-        "protocol_name": protocol_name,
-        "parameters": component.plugin_editor.get_protocol_parameters(protocol_name)
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginProtocolParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def plugin_get_operation_parameters(component: object, plugin: str, operation: str):
-    """Get parameters for a plugin operation.
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin : str
-        Plugin name
-    operation : str
-        Script relative path within the plugin's install_file directory
-    """
-    # get the plugin path
-    plugin_path = os.path.join(fissure.utils.PLUGIN_DIR, plugin)
-    if not os.path.exists(plugin_path):
-        component.logger.error(f"Plugin {plugin} does not exist in {fissure.utils.PLUGIN_DIR}")
-        return
-
-    # get the operation path
-    operation_path = os.path.join(plugin_path, "operations", operation)
-    if not os.path.exists(operation_path):
-        component.logger.error(f"Operation {operation} does not exist in plugin {plugin}")
-        return
-    
-    # import and run the get_arguments function from the operation script
-    try:
-        spec = importlib.util.spec_from_file_location("operation_module", operation_path)
-        operation_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(operation_module)
-        OperationMain = getattr(operation_module, "OperationMain", None)
-        if OperationMain is not None:
-            if callable(OperationMain.get_arguments):
-                parameters = OperationMain.get_arguments()
-            else:
-                component.logger.error(f"OperationMain.get_arguments function not found in {operation}")
-                return
-        else:
-            component.logger.error(f"OperationMain class not found in {operation}")
-            return
-        if callable(OperationMain.get_resources):
-            resources = OperationMain.get_resources()
-        else:
-            component.logger.warning(f"OperationMain.get_resources function not found in {operation}, resources will not be included")
-            resources = {}
-        if callable(OperationMain.get_interfaces):
-            interfaces = OperationMain.get_interfaces()
-        else:
-            component.logger.warning(f"OperationMain.get_interfaces function not found in {operation}, interfaces will not be included")
-            interfaces = {}
-    except Exception as e:
-        component.logger.error(f"Error importing operation script {operation}: {e}")
-        return
-
-    # cast all values to strings (ensures json serializability)
-    for key, value in parameters.items():
-        for subkey, subvalue in value.items():
-            parameters[key][subkey] = str(subvalue)
-
-    # send the plugin operation parameters to the dashboard
-    PARAMETERS = {
-        "plugin": plugin,
-        "operation": operation,
-        "parameters": parameters,
-        "resources": resources,
-        "interfaces": interfaces
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginOperationParameters",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def plugin_get_operations(component: object, plugin: str):
-    """Get operations for a plugin.
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin : str
-        Plugin name
-    """
-    # get the plugin path
-    plugin_path = os.path.join(fissure.utils.PLUGIN_DIR, plugin)
-    if not os.path.exists(plugin_path):
-        component.logger.error(f"Plugin {plugin} does not exist in {fissure.utils.PLUGIN_DIR}")
-        return
-    
-    # get the operations path
-    operations_path = os.path.join(plugin_path, "operations")
-    if not os.path.exists(operations_path):
-        component.logger.error(f"Plugin {plugin} does not have an operations directory")
-        return
-    
-    # get the list of operations (python scripts) in the operations directory
-    operations = []
-    for filename in os.listdir(operations_path):
-        if filename.endswith(".py"):
-            operations += [filename]
-
-    # send the plugin operations to the dashboard
-    PARAMETERS = {
-        "plugin": plugin,
-        "operations": operations,
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "responsePluginOperations",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def run_plugin_operation(component: object, node_uid: str, plugin: str, operation: str, parameters: dict = {}):
-    """Run a plugin operation on the sensor node.
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin : str
-        Plugin name
-    operation : str
-        Script relative path within the plugin's install_file directory
-    parameters : dict, optional
-        Additional parameters for the operation, by default {}
-    """
-    PARAMETERS = {
-        "plugin": plugin,
-        "operation": operation,
-        "parameters": parameters,
         "node_uid": node_uid,
+        "plugin_name": plugin_name,
+        "success": bool(success),
+        "status": status,
+        "message": message,
+        "output": output,
+        "hub_inventory": plugin.get_local_plugin_inventory(),
+        "node_inventory": node_inventory,
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "run_plugin_operation",
+        fissure.comms.MessageFields.MESSAGE_NAME: "repairPluginSetupResults",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
-    # Resolve Identity
-    identity = component.nodes[node_uid].get("identity", None)
+
+async def _send_plugin_deploy_result(
+    component: object,
+    *,
+    node_uid="",
+    plugin_name="",
+    transfer_id="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    node_inventory=None,
+):
+    """Send one Deploy/Update lifecycle result to the Dashboard."""
+    if not component.dashboard_connected:
+        return
+
+    PARAMETERS = {
+        "node_uid": node_uid,
+        "plugin_name": plugin_name,
+        "transfer_id": transfer_id,
+        "success": bool(
+            success
+        ),
+        "status": str(
+            status
+            or ""
+        ),
+        "message": str(
+            message
+            or ""
+        ),
+        "output": str(
+            output
+            or ""
+        ),
+        "hub_inventory": (
+            plugin.get_local_plugin_inventory()
+        ),
+        "node_inventory": node_inventory,
+    }
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "deployPluginResults",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    await component.dashboard_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
+
+
+def _get_plugin_deployments(
+    component: object,
+):
+    """Return/create HIPRFISR's pending plugin deployment map."""
+    deployments = getattr(
+        component,
+        "_plugin_deployments",
+        None,
+    )
+
+    if not isinstance(
+        deployments,
+        dict,
+    ):
+        deployments = {}
+        component._plugin_deployments = (
+            deployments
+        )
+
+    return deployments
+
+
+async def _cancel_sensor_plugin_deployment(
+    component: object,
+    deployment: dict,
+):
+    """Release the Sensor Node reservation for a failed transfer."""
+    node_uid = str(
+        deployment.get(
+            "node_uid",
+            "",
+        )
+        or ""
+    ).strip()
+
+    node = (
+        (component.nodes or {})
+        .get(
+            node_uid,
+            {},
+        )
+        or {}
+    )
+    identity = node.get(
+        "identity"
+    )
+
     if identity is None:
         return
-    
-    # Send through ROUTER
+
+    PARAMETERS = {
+        "plugin_name": str(
+            deployment.get(
+                "plugin_name",
+                "",
+            )
+            or ""
+        ),
+        "transfer_id": str(
+            deployment.get(
+                "transfer_id",
+                "",
+            )
+            or ""
+        ),
+    }
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "cancelPluginDeployment",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
     await component.sensor_node_router.send_msg(
         fissure.comms.MessageTypes.COMMANDS,
         msg,
-        target_ids=[identity]
-    )    
+        target_ids=[
+            identity
+        ],
+    )
+
+
+async def _stream_hub_plugin_package(
+    component: object,
+    deployment: dict,
+):
+    """Package one Hub plugin and stream it through the binary transfer plane."""
+    node_uid = str(
+        deployment.get(
+            "node_uid",
+            "",
+        )
+        or ""
+    ).strip()
+    plugin_name = str(
+        deployment.get(
+            "plugin_name",
+            "",
+        )
+        or ""
+    ).strip()
+    transfer_id = str(
+        deployment.get(
+            "transfer_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    package = None
+
+    try:
+        package = (
+            plugin.create_plugin_package(
+                plugin_name
+            )
+        )
+
+        package_path = str(
+            package.get(
+                "package_path",
+                "",
+            )
+            or ""
+        )
+        file_size = int(
+            package.get(
+                "file_size",
+                0,
+            )
+            or 0
+        )
+        sha256 = str(
+            package.get(
+                "sha256",
+                "",
+            )
+            or ""
+        )
+
+        hub_manifest = (
+            plugin.get_plugin_manifest(
+                plugin_name
+            )
+        )
+        hub_version = str(
+            hub_manifest.get(
+                "version",
+                "",
+            )
+            or ""
+        )
+
+        router = getattr(
+            component,
+            "artifact_transfer_router",
+            None,
+        )
+
+        if router is None:
+            raise RuntimeError(
+                "HIPRFISR binary transfer router is unavailable"
+            )
+
+        if router.get_sensor_identity(
+            node_uid
+        ) is None:
+            raise RuntimeError(
+                "Remote Sensor Node is not connected "
+                "to the binary transfer plane"
+            )
+
+        await router.send_local_start(
+            node_uid,
+            transfer_id,
+            {
+                "transfer_type":
+                    "plugin_package_upload",
+                "destination_node_uid":
+                    node_uid,
+                "plugin_name":
+                    plugin_name,
+                "hub_version":
+                    hub_version,
+                "filename":
+                    os.path.basename(
+                        package_path
+                    ),
+                "file_size":
+                    file_size,
+                "sha256":
+                    sha256,
+                "refresh_file_list":
+                    False,
+                "chunk_size":
+                    fissure.comms.ARTIFACT_CHUNK_SIZE,
+            },
+        )
+
+        sequence = 0
+        bytes_sent = 0
+
+        with open(
+            package_path,
+            "rb",
+        ) as handle:
+            while True:
+                chunk = handle.read(
+                    fissure.comms.ARTIFACT_CHUNK_SIZE
+                )
+
+                if not chunk:
+                    break
+
+                await router.send_local_chunk(
+                    node_uid,
+                    transfer_id,
+                    sequence,
+                    chunk,
+                )
+
+                sequence += 1
+                bytes_sent += len(
+                    chunk
+                )
+
+                await asyncio.sleep(
+                    0
+                )
+
+        if bytes_sent != file_size:
+            raise RuntimeError(
+                "Hub plugin package changed during transfer"
+            )
+
+        await router.send_local_file_complete(
+            node_uid,
+            transfer_id,
+            {
+                "plugin_name":
+                    plugin_name,
+                "bytes_sent":
+                    bytes_sent,
+                "chunks_sent":
+                    sequence,
+                "sha256":
+                    sha256,
+            },
+        )
+
+        await router.send_local_complete(
+            node_uid,
+            transfer_id,
+            {
+                "plugin_name":
+                    plugin_name,
+                "bytes_sent":
+                    bytes_sent,
+                "chunks_sent":
+                    sequence,
+                "sha256":
+                    sha256,
+            },
+        )
+
+        component.logger.info(
+            "Streamed Hub plugin package "
+            "plugin=%s transfer_id=%s node_uid=%s "
+            "bytes=%s chunks=%s",
+            plugin_name,
+            transfer_id,
+            node_uid,
+            bytes_sent,
+            sequence,
+        )
+
+    except Exception as exc:
+        deployments = (
+            _get_plugin_deployments(
+                component
+            )
+        )
+        deployments.pop(
+            transfer_id,
+            None,
+        )
+
+        try:
+            await _cancel_sensor_plugin_deployment(
+                component,
+                deployment,
+            )
+        except Exception:
+            pass
+
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            transfer_id=transfer_id,
+            success=False,
+            status="Transfer Failed",
+            message=str(
+                exc
+            ),
+        )
+
+    finally:
+        if package:
+            package_path = str(
+                package.get(
+                    "package_path",
+                    "",
+                )
+                or ""
+            )
+
+            if (
+                package_path
+                and os.path.isfile(
+                    package_path
+                )
+            ):
+                try:
+                    os.remove(
+                        package_path
+                    )
+                except OSError:
+                    pass
+
+
+async def deployPlugin(
+    component: object,
+    node_uid="",
+    plugin_name="",
+):
+    """
+    Begin one Hub -> remote Sensor Node Deploy/Update lifecycle.
+
+    No package bytes are sent until the remote Sensor Node explicitly prepares.
+    """
+    node_uid = str(
+        node_uid
+        or ""
+    ).strip()
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
+
+    hub_inventory = (
+        plugin.get_local_plugin_inventory()
+    )
+
+    hub_plugin_entry = (
+        hub_inventory.get(
+            plugin_name,
+            {},
+        )
+        or {}
+    )
+
+    required_plugins = [
+        str(required_plugin).strip()
+        for required_plugin in (
+            hub_plugin_entry.get(
+                "required_plugins",
+                [],
+            )
+            or []
+        )
+        if str(required_plugin).strip()
+    ]
+
+    if plugin_name not in hub_inventory:
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            success=False,
+            status="Failed",
+            message=(
+                f"Hub plugin is not deployed: "
+                f"{plugin_name}"
+            ),
+        )
+        return
+
+    node = (
+        (component.nodes or {})
+        .get(
+            node_uid,
+            {},
+        )
+        or {}
+    )
+
+    identity = node.get(
+        "identity"
+    )
+
+    if identity is None:
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            success=False,
+            status="Failed",
+            message=(
+                "Selected Sensor Node is unavailable."
+            ),
+        )
+        return
+
+    if str(
+        node.get(
+            "network_type",
+            "",
+        )
+        or ""
+    ).strip().lower() != "ip":
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            success=False,
+            status="Failed",
+            message=(
+                "Plugin deployment currently requires "
+                "an IP Sensor Node."
+            ),
+        )
+        return
+
+    deployments = (
+        _get_plugin_deployments(
+            component
+        )
+    )
+
+    for pending in deployments.values():
+        if not isinstance(
+            pending,
+            dict,
+        ):
+            continue
+
+        if (
+            pending.get(
+                "node_uid"
+            )
+            == node_uid
+            and pending.get(
+                "plugin_name"
+            )
+            == plugin_name
+        ):
+            await _send_plugin_deploy_result(
+                component,
+                node_uid=node_uid,
+                plugin_name=plugin_name,
+                success=False,
+                status="Blocked",
+                message=(
+                    f"{plugin_name} already has "
+                    "a deployment in progress."
+                ),
+            )
+            return
+
+    transfer_id = str(
+        uuid.uuid4()
+    )
+
+    deployment = {
+        "node_uid":
+            node_uid,
+        "plugin_name":
+            plugin_name,
+        "transfer_id":
+            transfer_id,
+        "started_at":
+            time.time(),
+    }
+
+    deployments[
+        transfer_id
+    ] = deployment
+
+    PARAMETERS = {
+        "plugin_name":
+            plugin_name,
+        "transfer_id":
+            transfer_id,
+        "required_plugins":
+            required_plugins,
+    }
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "preparePluginDeployment",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    try:
+        await component.sensor_node_router.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+            target_ids=[
+                identity
+            ],
+        )
+
+    except Exception as exc:
+        deployments.pop(
+            transfer_id,
+            None,
+        )
+
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            transfer_id=transfer_id,
+            success=False,
+            status="Failed",
+            message=(
+                "Could not prepare Sensor Node "
+                f"for plugin deployment: {exc}"
+            ),
+        )
+
+
+async def preparePluginDeploymentResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    transfer_id="",
+    success=False,
+    message="",
+):
+    """Stream package bytes only after the remote Sensor Node approves."""
+    deployments = (
+        _get_plugin_deployments(
+            component
+        )
+    )
+
+    deployment = deployments.get(
+        transfer_id
+    )
+
+    if not isinstance(
+        deployment,
+        dict,
+    ):
+        component.logger.warning(
+            "Ignoring unknown plugin deployment preparation "
+            "transfer_id=%s",
+            transfer_id,
+        )
+        return
+
+    if (
+        deployment.get(
+            "node_uid"
+        )
+        != node_uid
+        or deployment.get(
+            "plugin_name"
+        )
+        != plugin_name
+    ):
+        deployments.pop(
+            transfer_id,
+            None,
+        )
+
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            transfer_id=transfer_id,
+            success=False,
+            status="Failed",
+            message=(
+                "Plugin deployment preparation "
+                "did not match the pending request."
+            ),
+        )
+        return
+
+    if not success:
+        deployments.pop(
+            transfer_id,
+            None,
+        )
+
+        await _send_plugin_deploy_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            transfer_id=transfer_id,
+            success=False,
+            status="Blocked",
+            message=str(
+                message
+                or "Sensor Node rejected plugin deployment."
+            ),
+        )
+        return
+
+    await _stream_hub_plugin_package(
+        component,
+        deployment,
+    )
+
+
+async def finalizePluginDeploymentResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    transfer_id="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    node_inventory=None,
+):
+    """Complete one pending deployment and return the refreshed inventory."""
+    deployments = (
+        _get_plugin_deployments(
+            component
+        )
+    )
+
+    deployments.pop(
+        transfer_id,
+        None,
+    )
+
+    await _send_plugin_deploy_result(
+        component,
+        node_uid=node_uid,
+        plugin_name=plugin_name,
+        transfer_id=transfer_id,
+        success=success,
+        status=status,
+        message=message,
+        output=output,
+        node_inventory=node_inventory,
+    )
+
+
+async def _send_plugin_remove_result(
+    component: object,
+    *,
+    node_uid="",
+    plugin_name="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    node_inventory=None,
+):
+    """Send one managed Remove result and current Hub inventory to Dashboard."""
+    if not component.dashboard_connected:
+        return
+
+    PARAMETERS = {
+        "node_uid": node_uid,
+        "plugin_name": plugin_name,
+        "success": bool(
+            success
+        ),
+        "status": str(
+            status
+            or ""
+        ),
+        "message": str(
+            message
+            or ""
+        ),
+        "output": str(
+            output
+            or ""
+        ),
+        "hub_inventory": (
+            plugin.get_local_plugin_inventory()
+        ),
+        "node_inventory": node_inventory,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "removeManagedPluginResults",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    await component.dashboard_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
+
+
+async def removeManagedPlugin(
+    component: object,
+    node_uid="",
+    plugin_name="",
+):
+    """Request managed plugin removal on the selected Sensor Node."""
+    node_uid = str(
+        node_uid
+        or ""
+    ).strip()
+
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
+
+    node = (
+        (component.nodes or {})
+        .get(
+            node_uid,
+            {},
+        )
+        or {}
+    )
+
+    identity = node.get(
+        "identity"
+    )
+
+    if identity is None:
+        await _send_plugin_remove_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            success=False,
+            status="Failed",
+            message="Selected Sensor Node is unavailable.",
+        )
+        return
+
+    PARAMETERS = {
+        "plugin_name":
+            plugin_name,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "removeManagedPlugin",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    try:
+        await component.sensor_node_router.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+            target_ids=[
+                identity
+            ],
+        )
+
+    except Exception as exc:
+        await _send_plugin_remove_result(
+            component,
+            node_uid=node_uid,
+            plugin_name=plugin_name,
+            success=False,
+            status="Failed",
+            message=(
+                f"Could not request plugin removal: {exc}"
+            ),
+        )
+
+
+async def removeManagedPluginResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    node_inventory=None,
+):
+    """Forward one managed plugin-removal result to the Dashboard."""
+    await _send_plugin_remove_result(
+        component,
+        node_uid=node_uid,
+        plugin_name=plugin_name,
+        success=success,
+        status=status,
+        message=message,
+        output=output,
+        node_inventory=node_inventory,
+    )
 
 
 async def stop_plugin_operation(component: object, node_uid: str, operation_id: str):
@@ -5898,6 +6252,9 @@ async def soiUpdate(component: object,
     SensorNode.send_soi_update() resolves True to live node GPS/time values.
     This hub callback receives concrete values and preserves prior values only
     when a field is omitted or empty.
+
+    Merge an SOI update into HIPRFISR's canonical SOI store and emit the
+    resulting record through the Tactical/TAK SOI path.
     """
     if summary is None or not isinstance(summary, dict):
         summary = {}
@@ -6166,22 +6523,6 @@ async def soiUpdate(component: object,
 
     component.sois[soi_key] = record
 
-    parameters = {"soi": record}
-    message = {
-        fissure.comms.MessageFields.IDENTIFIER:
-            component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME:
-            "soiUpdate",
-        fissure.comms.MessageFields.PARAMETERS:
-            parameters,
-    }
-
-    if component.dashboard_connected:
-        await component.dashboard_socket.send_msg(
-            fissure.comms.MessageTypes.COMMANDS,
-            message,
-        )
-
     uid_core = (
         record.get("soi_id")
         or record.get("operation_id")
@@ -6209,6 +6550,7 @@ async def soiUpdate(component: object,
         ),
         "stage": record.get("stage"),
         "stage_order": record.get("stage_order"),
+        "record_json": json.dumps(record, default=str, separators=(",", ":")),
     }
 
     if merged_summary:
@@ -6224,83 +6566,184 @@ async def soiUpdate(component: object,
         "alt": record.get("hae_m", 0.0),
     })
 
+
 # ---- Measurement aggregation support (sensor nodes can send raw samples via targetUpdate) ----
-def _fissure_geo_process_measurement(component, *, target_id, frequency_hz, node_uid, lat, lon, rssi_db, observation_time):
-    """Store a raw measurement, run multilateration + CE when ready, and return (est_lat, est_lon, ce_m) or None."""
-    try:
-        # from fissure_geo import Sample, PathLossModel, MultilaterationEstimator, estimate_ce_from_samples
-        from fissure.utils.geo import (
-            Sample,
-            PathLossModel,
-            MultilaterationEstimator,
-            estimate_ce_from_samples,
+def _reset_target_geolocation_session(component, target_id: str) -> int:
+    """Clear cached measurement state for one target before a new geolocation run."""
+    target_id = str(target_id or "").strip()
+    if not target_id or not hasattr(component, "_geo_targets"):
+        return 0
+
+    keys = [
+        key for key in list(component._geo_targets.keys())
+        if isinstance(key, tuple) and key and str(key[0]) == target_id
+    ]
+    for key in keys:
+        component._geo_targets.pop(key, None)
+
+    if keys:
+        component.logger.info(
+            f"Reset geolocation measurement session for target_id={target_id}; "
+            f"cleared={len(keys)}"
         )
-    except Exception:
+    return len(keys)
+
+
+def _fissure_geo_process_measurement(
+    component,
+    *,
+    target_id,
+    frequency_hz,
+    node_uid,
+    lat,
+    lon,
+    rssi_db,
+    observation_time,
+    path_loss_n=2.2,
+    path_loss_p0_db=-40.0,
+    measurement_units="dBm",
+    allow_solve=True,
+):
+    """Store one measurement and return (lat, lon, ce_m) once geometry is usable."""
+    try:
+        from fissure.utils.geo import PathLossModel, MultilaterationEstimator, estimate_ce_from_samples
+    except Exception as exc:
+        component.logger.error(f"Unable to load geolocation utilities: {exc}")
         return None
 
-    # Allow wifi/no-frequency measurements
     try:
-        if frequency_hz is None:
-            freq_bin_hz = -1.0
-        else:
-            # Frequency binning to fuse slightly different reported center freqs (default 1 kHz bins)
-            freq_bin_hz = float(round(float(frequency_hz) / 1000.0) * 1000.0)
+        freq_bin_hz = -1.0 if frequency_hz is None else float(round(float(frequency_hz) / 1000.0) * 1000.0)
     except Exception:
         freq_bin_hz = -1.0
 
     key = (str(target_id), float(freq_bin_hz))
-
     if not hasattr(component, "_geo_targets"):
         component._geo_targets = {}
 
     st = component._geo_targets.get(key)
     if st is None:
-        # Defaults; you can tune per target type later
-        model = PathLossModel(n=2.2, p0_db=-40.0)
-        est = MultilaterationEstimator(max_samples=120)
-        st = {"model": model, "est": est, "last_ce": 0.0, "ce_cached": 75.0}
+        model = PathLossModel(n=float(path_loss_n), p0_db=float(path_loss_p0_db))
+        est = MultilaterationEstimator(
+            max_samples=120,
+            min_position_separation_m=8.0,
+            min_spread_m=20.0,
+        )
+        st = {
+            "model": model,
+            "est": est,
+            "last_ce": 0.0,
+            "ce_cached": None,
+            "last_geometry_signature": None,
+            "last_solution_log": 0.0,
+            "measurement_units": str(measurement_units or ""),
+            "range_calibrated": bool(allow_solve),
+        }
         component._geo_targets[key] = st
 
     model = st["model"]
     est = st["est"]
 
-    # Add sample
     try:
-        est.add_measurement(lat=float(lat), lon=float(lon), rssi_db=float(rssi_db), t=0.0, model=model)
-    except Exception:
-        try:
-            est.add_sample(Sample(float(lat), float(lon), float(rssi_db), 0.0))
-        except Exception:
-            return None
-
-    if not getattr(est, "ready", False):
+        est.add_measurement(
+            lat=float(lat),
+            lon=float(lon),
+            rssi_db=float(rssi_db),
+            t=time.time(),
+            node_uid=str(node_uid or ""),
+            model=model,
+        )
+    except Exception as exc:
+        component.logger.warning(
+            f"Rejected geolocation measurement target_id={target_id} node={node_uid}: {exc}"
+        )
         return None
 
-    # Estimate
+    geometry = est.geometry
+    st["geometry"] = dict(geometry)
+
+    target = (getattr(component, "targets", {}) or {}).get(str(target_id))
+    if isinstance(target, dict):
+        geo = dict(target.get("geolocate") or {})
+        geo.update({
+            "sample_count": int(geometry.get("sample_count", 0)),
+            "unique_node_count": int(geometry.get("unique_node_count", 0)),
+            "unique_position_count": int(geometry.get("unique_position_count", 0)),
+            "spread_m": round(float(geometry.get("spread_m", 0.0)), 1),
+            "shape_ratio": round(float(geometry.get("shape_ratio", 0.0)), 3),
+            "geometry_quality": str(geometry.get("quality", "")),
+            "last_observation_time": observation_time or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "measurement_units": str(measurement_units or ""),
+            "range_calibrated": bool(allow_solve),
+            "had_detections": True,
+        })
+        target["geolocate"] = geo
+
+    signature = (
+        geometry.get("unique_position_count"),
+        geometry.get("unique_node_count"),
+        geometry.get("quality"),
+    )
+    if signature != st.get("last_geometry_signature"):
+        component.logger.info(
+            f"Geo observations target={target_id} node={node_uid or '-'} "
+            f"samples={geometry.get('sample_count', 0)} "
+            f"nodes={geometry.get('unique_node_count', 0)} "
+            f"positions={geometry.get('unique_position_count', 0)} "
+            f"spread={float(geometry.get('spread_m', 0.0)):.1f}m "
+            f"shape={float(geometry.get('shape_ratio', 0.0)):.3f} "
+            f"quality={geometry.get('quality', '')}"
+        )
+        st["last_geometry_signature"] = signature
+
+    if not allow_solve:
+        if not st.get("uncalibrated_logged"):
+            component.logger.info(
+                f"Geo observations for target={target_id} are being collected but not solved: "
+                f"measurement_units={measurement_units or '-'} requires path-loss calibration"
+            )
+            st["uncalibrated_logged"] = True
+        return None
+
+    if not est.ready:
+        return None
+
     try:
         out = est.estimate_latlon(model)
         if not out:
             return None
         est_lat, est_lon = out
-    except Exception:
+    except Exception as exc:
+        component.logger.warning(f"Geolocation solve failed for target_id={target_id}: {exc}")
         return None
 
-    # CE (throttle)
-    import time as _time
-    now = _time.time()
+    now = time.time()
     if (now - float(st.get("last_ce", 0.0))) >= 6.0:
         try:
-            samples_ref = getattr(est, "_samples", None) or getattr(est, "samples", None) or []
-            ce = estimate_ce_from_samples(samples_ref[-30:], model, confidence=0.90)
+            ce = estimate_ce_from_samples(
+                est.samples[-30:],
+                model,
+                confidence=0.90,
+                min_position_separation_m=est.min_position_separation_m,
+                min_spread_m=est.min_spread_m,
+            )
             if ce is not None:
-                st["ce_cached"] = float(ce)
-        except Exception:
-            pass
+                st["ce_cached"] = max(10.0, float(ce))
+        except Exception as exc:
+            component.logger.debug(f"CE estimate unavailable for target_id={target_id}: {exc}")
         st["last_ce"] = now
 
-    return (float(est_lat), float(est_lon), float(st.get("ce_cached", 75.0)))
+    ce_m = st.get("ce_cached")
+    if (now - float(st.get("last_solution_log", 0.0))) >= 3.0:
+        component.logger.info(
+            f"Geo solution target={target_id} lat={float(est_lat):.7f} lon={float(est_lon):.7f} "
+            f"ce={float(ce_m):.1f}m quality={geometry.get('quality', '')}"
+            if ce_m is not None
+            else f"Geo solution target={target_id} lat={float(est_lat):.7f} lon={float(est_lon):.7f} "
+                 f"ce=unavailable quality={geometry.get('quality', '')}"
+        )
+        st["last_solution_log"] = now
 
-    # component.logger.info(f"HIPRFISR targetUpdate received target_id={target_id} state={state}")
+    return float(est_lat), float(est_lon), (float(ce_m) if ce_m is not None else None)
 
 
 def _get_known_wifi_target_ids(component) -> List[str]:
@@ -6428,11 +6871,12 @@ async def targetUpdate(
             location.update({
                 "lat": float(est_lat),
                 "lon": float(est_lon),
-                "ce_m": float(ce_m),
                 "source": "hiprfisr_multilateration",
             })
-            if isinstance(summary, dict):
-                summary["ce_m"] = float(ce_m)
+            if ce_m is not None:
+                location["ce_m"] = float(ce_m)
+                if isinstance(summary, dict):
+                    summary["ce_m"] = float(ce_m)
 
     if classification is None or not isinstance(classification, dict):
         classification = {}
@@ -6639,6 +7083,12 @@ def _normalize_target_record(
         list,
     ):
         record["history"] = []
+
+    if not isinstance(
+        record.get("recommendations"),
+        list,
+    ):
+        record["recommendations"] = []        
 
     if not isinstance(
         record.get("artifact_ids"),
@@ -7219,6 +7669,7 @@ async def targetPatch(
         ),
         "display_label": display_label,
         "state": record.get("state"),
+        "notes": record.get("notes", ""),
         "frequency_mhz": record.get(
             "frequency_mhz"
         ),
@@ -7242,10 +7693,26 @@ async def targetPatch(
             record.get("history") or [],
             default=str,
         ),
+        "recommendations_json": json.dumps(
+            record.get("recommendations") or [],
+            default=str,
+        ),
         "geolocation_status": geo.get(
             "status",
             "idle",
         ),
+        "geolocate_json": json.dumps(
+            geo,
+            default=str,
+        ),
+        "location_source": str(
+            location.get("source") or ""
+        ),        
+        "geolocation_sample_count": geo.get("sample_count", 0),
+        "geolocation_unique_node_count": geo.get("unique_node_count", 0),
+        "geolocation_unique_position_count": geo.get("unique_position_count", 0),
+        "geolocation_spread_m": geo.get("spread_m", 0.0),
+        "geolocation_geometry_quality": geo.get("geometry_quality", ""),
         "lat": out_lat,
         "lon": out_lon,
         "hae_m": out_hae,
@@ -7260,6 +7727,10 @@ async def targetPatch(
         "rssi_dbm": wifi.get("rssi_dbm"),
         "encryption": wifi.get(
             "encryption",
+            "",
+        ),
+        "vendor": wifi.get(
+            "vendor",
             "",
         ),
         "last_observation_time": wifi.get(
@@ -7278,7 +7749,134 @@ async def targetPatch(
             "lat": out_lat,
             "lon": out_lon,
             "alt": out_hae,
+            "ce": out_ce,
         },
+    )
+
+
+async def targetRecommendation(
+    component: object,
+    target_id="",
+    mode="add",
+    recommendation=None,
+    recommendation_id="",
+):
+    """Add or remove a structured recommended action on an authoritative Target."""
+    target_id = str(target_id or "").strip()
+    mode = str(mode or "add").strip().lower()
+    recommendation = recommendation if isinstance(recommendation, dict) else {}
+    recommendation_id = str(
+        recommendation_id
+        or recommendation.get("recommendation_id")
+        or ""
+    ).strip()
+
+    if not target_id or target_id not in (getattr(component, "targets", {}) or {}):
+        component.logger.warning(f"Ignoring Target recommendation for unknown target: {target_id}")
+        return
+
+    target = component.targets.get(target_id) or {}
+    current = [dict(value) for value in (target.get("recommendations") or []) if isinstance(value, dict)]
+
+    if mode == "remove":
+        if not recommendation_id:
+            return
+        updated = [
+            value for value in current
+            if str(value.get("recommendation_id") or "").strip() != recommendation_id
+        ]
+        if len(updated) == len(current):
+            return
+
+        history_entry = {
+            "event": "recommended_action_removed",
+            "recommendation_id": recommendation_id,
+            "requester": "dashboard",
+        }
+        await targetPatch(
+            component,
+            target_id=target_id,
+            patch={"recommendations": updated},
+            history_entry=history_entry,
+            artifact_id="",
+        )
+        return
+
+    plugin_name = str(recommendation.get("plugin") or "").strip()
+    action_name = str(recommendation.get("action") or "").strip()
+    if not plugin_name or not action_name:
+        component.logger.warning("Ignoring Target recommendation without plugin/action.")
+        return
+
+    parameters = recommendation.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        parameters = {}
+
+    normalized = dict(recommendation)
+    normalized["plugin"] = plugin_name
+    normalized["action"] = action_name
+    normalized["parameters"] = dict(parameters)
+    normalized["reason"] = str(normalized.get("reason") or "").strip()
+    normalized.setdefault(
+        "timestamp",
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+    match_index = None
+    if recommendation_id:
+        for index, existing in enumerate(current):
+            if str(existing.get("recommendation_id") or "").strip() == recommendation_id:
+                match_index = index
+                break
+
+    if match_index is None:
+        candidate_key = (
+            plugin_name,
+            action_name,
+            json.dumps(parameters, sort_keys=True, default=str),
+            normalized["reason"],
+        )
+        for index, existing in enumerate(current):
+            existing_key = (
+                str(existing.get("plugin") or "").strip(),
+                str(existing.get("action") or "").strip(),
+                json.dumps(existing.get("parameters") or {}, sort_keys=True, default=str),
+                str(existing.get("reason") or "").strip(),
+            )
+            if existing_key == candidate_key:
+                # An analysis action may encounter the same condition repeatedly.
+                # Keep one recommendation instead of growing the Target forever.
+                return
+
+    if not recommendation_id:
+        recommendation_id = str(uuid.uuid4())
+    normalized["recommendation_id"] = recommendation_id
+
+    if match_index is None:
+        current.append(normalized)
+    else:
+        current[match_index] = normalized
+
+    history_entry = {
+        "event": "action_recommended",
+        "recommendation_id": recommendation_id,
+        "plugin": plugin_name,
+        "action": action_name,
+        "reason": normalized["reason"],
+        "source_operation_id": str(
+            normalized.get("operation_id")
+            or normalized.get("source_operation_id")
+            or ""
+        ).strip(),
+        "node_uid": str(normalized.get("node_uid") or "").strip(),
+    }
+
+    await targetPatch(
+        component,
+        target_id=target_id,
+        patch={"recommendations": current},
+        history_entry=history_entry,
+        artifact_id="",
     )
 
 
@@ -7350,6 +7948,7 @@ async def sendTargetsListTak(
                 ),
                 "display_label": display_label,
                 "state": target.get("state"),
+                "notes": target.get("notes", ""),
                 "frequency_mhz": target.get(
                     "frequency_mhz"
                 ),
@@ -7372,6 +7971,11 @@ async def sendTargetsListTak(
                 ),
                 "history_json": json.dumps(
                     target.get("history")
+                    or [],
+                    default=str,
+                ),
+                "recommendations_json": json.dumps(
+                    target.get("recommendations")
                     or [],
                     default=str,
                 ),
@@ -7704,89 +8308,131 @@ async def sendPluginTargetActionsTak(
         component.logger.debug(traceback.format_exc())
 
 
+def _filter_geolocate_nodes_for_action(component, candidates, plugin_name: str, action_name: str, max_nodes: int = 4):
+    """Prefer nodes whose cached settings confirm support for a plugin action.
+
+    Nodes with unknown settings remain eligible as a fallback so geolocation still works
+    before settings have been recalled from every connected Sensor Node.
+    """
+    confirmed = []
+    unknown = []
+
+    for candidate in list(candidates or []):
+        node_uid = str(candidate.get("uid") or "")
+        node = (getattr(component, "nodes", {}) or {}).get(node_uid) or {}
+        settings = node.get("settings") or {}
+
+        if not settings:
+            unknown.append(candidate)
+            continue
+
+        try:
+            actions = fissure.utils.plugin.get_plugin_actions(
+                plugin_name,
+                sensor_node_settings=settings,
+                logger=component.logger,
+            )
+        except Exception as exc:
+            component.logger.warning(
+                f"Unable to check geolocation action compatibility for node={node_uid}: {exc}"
+            )
+            unknown.append(candidate)
+            continue
+
+        if action_name in actions:
+            confirmed.append(candidate)
+        else:
+            component.logger.info(
+                f"Skipping geolocation node={node_uid}: cached hardware/settings do not support "
+                f"{plugin_name}.{action_name}"
+            )
+
+    ordered = confirmed + unknown
+    return ordered[:max(1, int(max_nodes))]
+
+
 async def geolocate_target_start(
     component: object,
     requester_uid: str,
-    requester_type: str = "tak",    
+    requester_type: str = "tak",
     parameters: dict = None,
 ):
-    """Select nearest nodes and start appropriate geolocation-related action."""
+    """Start one Target geolocation session across compatible Sensor Nodes."""
     try:
-        component.logger.info(f"geolocate_target_start called with parameters={parameters}")
+        component.logger.info(
+            f"geolocate_target_start called with parameters={parameters}"
+        )
 
         if parameters is None:
             parameters = {}
 
-        target_id = parameters.get("target_id")
+        target_id = str(
+            parameters.get("target_id")
+            or ""
+        ).strip()
         if not target_id:
-            component.logger.error("geolocate_target_start missing target_id")
-            return
-
-        target = component.targets.get(target_id)
-        if not target:
-            component.logger.error(f"Target not found for target_id={target_id}")
-            return
-
-        current_geo = target.get("geolocate") or {}
-        current_status = current_geo.get("status", "")
-
-        if current_status in ("starting", "running", "stopping"):
-            component.logger.warning(
-                f"Target {target_id} geolocation already active (status={current_status})"
-            )
-            await targetPatch(component, target_id=target_id, patch={})
-            return
-
-        search_similar_targets = bool(parameters.get("search_similar_targets", False))
-
-        target_location = target.get("location") or {}
-        target_lat = target_location.get("lat")
-        target_lon = target_location.get("lon")
-
-        if not fissure.utils.is_valid_lat_lon(target_lat, target_lon):
-            msg = "invalid_target_location"
             component.logger.error(
-                f"Target {target_id} missing valid location: lat={target_lat}, lon={target_lon}"
+                "geolocate_target_start missing target_id"
             )
-            _set_target_geolocate_status(
-                target,
-                status="error",
-                error=msg,
-            )
-            await targetPatch(component, target_id=target_id, patch={})
             return
 
-        nearest_nodes = fissure.utils.get_nearest_nodes_to_target(
-            component,
-            target,
-            max_nodes=3,
+        target = component.targets.get(
+            target_id
         )
+        if not target:
+            component.logger.error(
+                f"Target not found for target_id={target_id}"
+            )
+            return
 
-        if not nearest_nodes:
-            msg = "no_eligible_nodes"
+        current_geo = (
+            target.get("geolocate")
+            or {}
+        )
+        current_status = current_geo.get(
+            "status",
+            "",
+        )
+        if current_status in (
+            "starting",
+            "running",
+            "stopping",
+        ):
             component.logger.warning(
-                f"No eligible nodes with valid positions for target_id={target_id}"
+                f"Target {target_id} geolocation already active "
+                f"(status={current_status})"
             )
-            _set_target_geolocate_status(
-                target,
-                status="error",
-                error=msg,
+            await targetPatch(
+                component,
+                target_id=target_id,
+                patch={},
             )
-            await targetPatch(component, target_id=target_id, patch={})
             return
 
-        component.logger.info(
-            f"Nearest nodes for target_id={target_id}: "
-            + ", ".join(
-                f"{n['uid']} ({n['distance_m']:.1f} m)"
-                for n in nearest_nodes
+        search_similar_targets = bool(
+            parameters.get(
+                "search_similar_targets",
+                False,
             )
         )
+        preferred_node_uid = str(
+            parameters.get(
+                "preferred_node_uid",
+            )
+            or ""
+        ).strip()
 
-        config = _get_target_geolocate_action_config(
-            component,
-            target,
-            search_similar_targets=search_similar_targets,
+        config = (
+            _get_target_geolocate_action_config(
+                component,
+                target,
+                search_similar_targets=(
+                    search_similar_targets
+                ),
+                similar_target_ids=parameters.get(
+                    "similar_target_ids"
+                ),
+            )
         )
         if not config:
             msg = "unsupported_target_type"
@@ -7798,47 +8444,424 @@ async def geolocate_target_start(
                 status="unsupported",
                 error=msg,
             )
-            await targetPatch(component, target_id=target_id, patch={})
+            await targetPatch(
+                component,
+                target_id=target_id,
+                patch={},
+            )
             return
 
-        plugin_name = config["plugin_name"]
-        action_name = config["action_name"]
-        action_parameters = dict(config.get("parameters", {}))
-        mode = config.get("mode", "")
-
-        if "target_id" not in action_parameters and "target_ids" not in action_parameters:
-            action_parameters["target_id"] = target_id
-
-        if "search_similar_targets" not in action_parameters:
-            action_parameters["search_similar_targets"] = search_similar_targets
-
-        node_uid_list = [n["uid"] for n in nearest_nodes]
-
-        previous_state = target.get("state", "") or "imported"
-
-        _set_target_geolocate_status(
-            target,
-            status="starting",
-            mode=mode,
-            plugin=plugin_name,
-            action=action_name,
-            node_uids=node_uid_list,
-            error="",
+        plugin_name = config[
+            "plugin_name"
+        ]
+        action_name = config[
+            "action_name"
+        ]
+        action_parameters = dict(
+            config.get(
+                "parameters",
+                {},
+            )
         )
-        target["geolocate"]["previous_state"] = previous_state
-        target["geolocate"]["had_detections"] = False
-        target["state"] = "tracking"
+        mode = config.get(
+            "mode",
+            "",
+        )
 
-        await targetPatch(component, target_id=target_id, patch={})
+        if (
+            "target_id"
+            not in action_parameters
+            and "target_ids"
+            not in action_parameters
+        ):
+            action_parameters[
+                "target_id"
+            ] = target_id
+
+        if (
+            "search_similar_targets"
+            not in action_parameters
+        ):
+            action_parameters[
+                "search_similar_targets"
+            ] = search_similar_targets
+
+        shared_target_ids = [
+            target_id
+        ]
+        shared_operation_id = str(
+            uuid.uuid4()
+        )
+        action_parameters[
+            "operation_id"
+        ] = shared_operation_id
+
+        if (
+            mode == "wifi_similar"
+            and action_name
+            == "wifi_geolocate_all"
+        ):
+            mapped_ids = list(
+                (
+                    action_parameters.get(
+                        "target_bssids"
+                    )
+                    or {}
+                ).values()
+            )
+            shared_target_ids = list(
+                dict.fromkeys(
+                    [
+                        str(value)
+                        for value
+                        in mapped_ids
+                        if str(
+                            value
+                            or ""
+                        ).strip()
+                    ]
+                )
+            )
+
+            if (
+                target_id
+                not in shared_target_ids
+            ):
+                shared_target_ids.insert(
+                    0,
+                    target_id,
+                )
+
+        for session_target_id in (
+            shared_target_ids
+        ):
+            _reset_target_geolocation_session(
+                component,
+                session_target_id,
+            )
+
+        target_location = (
+            target.get("location")
+            or {}
+        )
+        target_lat = target_location.get(
+            "lat"
+        )
+        target_lon = target_location.get(
+            "lon"
+        )
+        target_location_valid = (
+            fissure.utils.is_valid_lat_lon(
+                target_lat,
+                target_lon,
+            )
+        )
+
+        candidates = []
+        if target_location_valid:
+            candidates = (
+                fissure.utils
+                .get_nearest_nodes_to_target(
+                    component,
+                    target,
+                    max_nodes=12,
+                )
+            )
+
+        if not candidates:
+            for (
+                node_uid,
+                node,
+            ) in (
+                getattr(
+                    component,
+                    "nodes",
+                    {},
+                )
+                or {}
+            ).items():
+                if not node.get(
+                    "connected",
+                    False,
+                ):
+                    continue
+
+                node_alt = node.get(
+                    "alt"
+                )
+                if node_alt in (
+                    None,
+                    "",
+                ):
+                    node_alt = node.get(
+                        "altitude"
+                    )
+
+                candidates.append({
+                    "uid":
+                        str(node_uid),
+                    "distance_m":
+                        None,
+                    "lat":
+                        node.get("lat"),
+                    "lon":
+                        node.get("lon"),
+                    "alt":
+                        node_alt,
+                    "status":
+                        node.get(
+                            "status",
+                            "unknown",
+                        ),
+                    "connected":
+                        True,
+                    "identity":
+                        node.get(
+                            "identity"
+                        ),
+                    "nickname":
+                        node.get(
+                            "nickname"
+                        ),
+                    "callsign":
+                        node.get(
+                            "callsign"
+                        ),
+                })
+
+        if preferred_node_uid:
+            preferred = None
+            remaining = []
+
+            for candidate in candidates:
+                if (
+                    str(
+                        candidate.get(
+                            "uid"
+                        )
+                        or ""
+                    )
+                    == preferred_node_uid
+                ):
+                    preferred = candidate
+                else:
+                    remaining.append(
+                        candidate
+                    )
+
+            if preferred is None:
+                node = (
+                    getattr(
+                        component,
+                        "nodes",
+                        {},
+                    )
+                    or {}
+                ).get(
+                    preferred_node_uid
+                ) or {}
+
+                if node.get(
+                    "connected",
+                    False,
+                ):
+                    preferred = {
+                        "uid":
+                            preferred_node_uid,
+                        "distance_m":
+                            None,
+                        "lat":
+                            node.get("lat"),
+                        "lon":
+                            node.get("lon"),
+                        "alt":
+                            node.get(
+                                "alt",
+                                node.get(
+                                    "altitude"
+                                ),
+                            ),
+                        "status":
+                            node.get(
+                                "status",
+                                "unknown",
+                            ),
+                        "connected":
+                            True,
+                        "identity":
+                            node.get(
+                                "identity"
+                            ),
+                        "nickname":
+                            node.get(
+                                "nickname"
+                            ),
+                        "callsign":
+                            node.get(
+                                "callsign"
+                            ),
+                    }
+
+            candidates = (
+                [preferred]
+                if preferred
+                else []
+            ) + remaining
+
+        if not candidates:
+            msg = "no_connected_nodes"
+            component.logger.warning(
+                f"No connected Sensor Nodes available for "
+                f"target_id={target_id}"
+            )
+
+            _set_target_geolocate_status(
+                target,
+                status="error",
+                error=msg,
+            )
+            await targetPatch(
+                component,
+                target_id=target_id,
+                patch={},
+            )
+            return
+
+        selected_nodes = (
+            _filter_geolocate_nodes_for_action(
+                component,
+                candidates,
+                plugin_name,
+                action_name,
+                max_nodes=4,
+            )
+        )
+        if not selected_nodes:
+            msg = "no_compatible_nodes"
+            component.logger.warning(
+                f"No compatible nodes for target_id={target_id} "
+                f"action={plugin_name}.{action_name}"
+            )
+            _set_target_geolocate_status(
+                target,
+                status="error",
+                error=msg,
+            )
+            await targetPatch(
+                component,
+                target_id=target_id,
+                patch={},
+            )
+            return
+
+        selected_descriptions = []
+        for node in selected_nodes:
+            distance_m = node.get(
+                "distance_m"
+            )
+            if distance_m is None:
+                selected_descriptions.append(
+                    str(
+                        node.get("uid")
+                        or ""
+                    )
+                )
+            else:
+                selected_descriptions.append(
+                    f"{node.get('uid')} "
+                    f"({float(distance_m):.1f} m)"
+                )
+
+        component.logger.info(
+            f"Selected geolocation nodes for target_id={target_id}: "
+            + ", ".join(
+                selected_descriptions
+            )
+        )
+
+        node_uid_list = [
+            str(
+                node.get("uid")
+                or ""
+            )
+            for node in selected_nodes
+        ]
+        node_uid_list = [
+            node_uid
+            for node_uid
+            in node_uid_list
+            if node_uid
+        ]
+
+        for (
+            session_target_id
+        ) in shared_target_ids:
+            session_target = (
+                component.targets.get(
+                    session_target_id
+                )
+            )
+            if not session_target:
+                continue
+
+            previous_state = (
+                session_target.get(
+                    "state",
+                    "",
+                )
+                or "imported"
+            )
+
+            _set_target_geolocate_status(
+                session_target,
+                status="starting",
+                mode=mode,
+                plugin=plugin_name,
+                action=action_name,
+                node_uids=node_uid_list,
+                error="",
+            )
+            session_target[
+                "geolocate"
+            ][
+                "previous_state"
+            ] = previous_state
+            session_target[
+                "geolocate"
+            ][
+                "had_detections"
+            ] = False
+            session_target[
+                "geolocate"
+            ][
+                "operation_id"
+            ] = shared_operation_id
+            session_target[
+                "state"
+            ] = "tracking"
+
+            await targetPatch(
+                component,
+                target_id=(
+                    session_target_id
+                ),
+                patch={},
+            )
 
         launched_nodes = []
-
         try:
-            launched_nodes = list(node_uid_list)
-
+            launched_nodes = list(
+                node_uid_list
+            )
             component.logger.info(
                 f"Launching {action_name} for target_id={target_id} "
                 f"on nodes={launched_nodes}"
+            )
+
+            component.logger.info(
+                f"Geolocation operation_id={shared_operation_id} "
+                f"targets={shared_target_ids} "
+                f"nodes={launched_nodes}"
             )
 
             await sendPluginActionTak(
@@ -7850,73 +8873,155 @@ async def geolocate_target_start(
                 action_name,
                 action_parameters,
             )
-
         except Exception as launch_err:
             component.logger.error(
                 f"Failed launching geolocate actions: {launch_err}"
             )
-            component.logger.debug(traceback.format_exc())
-
-        target = component.targets.get(target_id)
-        if not target:
-            component.logger.error(f"Target disappeared before running update: target_id={target_id}")
-            return
+            component.logger.debug(
+                traceback.format_exc()
+            )
 
         if not launched_nodes:
             msg = "launch_failed"
-
             component.logger.warning(
                 f"Geolocate start failed for target_id={target_id}"
             )
 
-            _set_target_geolocate_status(
-                target,
-                status="error",
-                mode=mode,
-                plugin=plugin_name,
-                action=action_name,
-                node_uids=[],
-                error=msg,
-            )
-            # restore pre-start state if nothing launched
-            previous_state = (target.get("geolocate") or {}).get("previous_state", "") or "imported"
-            target["state"] = previous_state
+            for (
+                session_target_id
+            ) in shared_target_ids:
+                session_target = (
+                    component.targets.get(
+                        session_target_id
+                    )
+                )
+                if not session_target:
+                    continue
 
-            await targetPatch(component, target_id=target_id, patch={})
+                session_geo = (
+                    session_target.get(
+                        "geolocate"
+                    )
+                    or {}
+                )
+                previous_state = (
+                    session_geo.get(
+                        "previous_state",
+                        "",
+                    )
+                    or "imported"
+                )
+                session_target[
+                    "state"
+                ] = previous_state
+
+                _set_target_geolocate_status(
+                    session_target,
+                    status="error",
+                    mode=mode,
+                    plugin=plugin_name,
+                    action=action_name,
+                    node_uids=[],
+                    error=msg,
+                )
+                session_target[
+                    "geolocate"
+                ][
+                    "operation_id"
+                ] = ""
+
+                await targetPatch(
+                    component,
+                    target_id=(
+                        session_target_id
+                    ),
+                    patch={},
+                )
             return
 
         component.logger.info(
-            f"Geolocate running for target_id={target_id} on nodes={launched_nodes}"
+            f"Geolocate running for target_id={target_id} "
+            f"on nodes={launched_nodes}"
         )
 
-        _set_target_geolocate_status(
-            target,
-            status="running",
-            mode=mode,
-            plugin=plugin_name,
-            action=action_name,
-            node_uids=launched_nodes,
-            error="",
-        )
-        await targetPatch(component, target_id=target_id, patch={})
+        for (
+            session_target_id
+        ) in shared_target_ids:
+            session_target = (
+                component.targets.get(
+                    session_target_id
+                )
+            )
+            if not session_target:
+                continue
+
+            _set_target_geolocate_status(
+                session_target,
+                status="running",
+                mode=mode,
+                plugin=plugin_name,
+                action=action_name,
+                node_uids=launched_nodes,
+                error="",
+            )
+            session_target[
+                "geolocate"
+            ][
+                "operation_id"
+            ] = shared_operation_id
+
+            await targetPatch(
+                component,
+                target_id=(
+                    session_target_id
+                ),
+                patch={},
+            )
 
     except Exception as e:
-        component.logger.error(f"Error in geolocate_target_start: {e}")
-        component.logger.debug(traceback.format_exc())
+        component.logger.error(
+            f"Error in geolocate_target_start: {e}"
+        )
+        component.logger.debug(
+            traceback.format_exc()
+        )
 
-        target_id = parameters.get("target_id")
+        target_id = (
+            parameters.get("target_id")
+            if parameters
+            else None
+        )
         if target_id:
-            target = component.targets.get(target_id)
+            target = component.targets.get(
+                target_id
+            )
             if target:
                 _set_target_geolocate_status(
                     target,
                     status="error",
                     error="exception",
                 )
-                previous_state = (target.get("geolocate") or {}).get("previous_state", "")
+                previous_state = (
+                    (
+                        target.get(
+                            "geolocate"
+                        )
+                        or {}
+                    ).get(
+                        "previous_state",
+                        "",
+                    )
+                )
                 if previous_state:
-                    target["state"] = previous_state
-                await targetPatch(component, target_id=target_id, patch={})
+                    target[
+                        "state"
+                    ] = previous_state
+
+                await targetPatch(
+                    component,
+                    target_id=target_id,
+                    patch={},
+                )
 
 
 def _get_target_geolocate_action_config(
@@ -7924,88 +9029,222 @@ def _get_target_geolocate_action_config(
     target: dict,
     *,
     search_similar_targets: bool = False,
+    similar_target_ids=None,
 ):
-    """
-    Resolve which plugin action should be launched for this target.
-
-    Returns:
-        {
-            "mode": "wifi_target" | "wifi_all" | "lfm_beacon" | "fixed_detection",
-            "plugin_name": "...",
-            "action_name": "...",
-            "parameters": {...},
-        }
-
-    Returns None if no supported mapping exists.
-    """
-    target_id = target.get("target_id", "")
+    """Resolve the current-architecture geolocation action for one Target."""
+    target_id = str(target.get("target_id") or "").strip()
     classification = target.get("classification") or {}
-
-    display_label = str(classification.get("display_label") or "").strip().lower()
+    display_label = str(
+        classification.get("display_label")
+        or ""
+    ).strip().lower()
 
     candidate_labels = []
     for candidate in classification.get("candidates", []):
         if isinstance(candidate, dict):
-            label = str(candidate.get("label") or "").strip().lower()
+            label = str(
+                candidate.get("label")
+                or ""
+            ).strip().lower()
             if label:
                 candidate_labels.append(label)
 
-    labels = [display_label] + candidate_labels
-    label_text = " ".join(labels)
-
+    label_text = " ".join(
+        [display_label] + candidate_labels
+    )
     frequency_mhz = target.get("frequency_mhz")
+    wifi = target.get("wifi") or {}
+    wifi_bssid = str(
+        wifi.get("bssid")
+        or ""
+    ).strip()
 
-    WIFI_PLUGIN = "WiFi"
-    BASE_PLUGIN = "Base"
+    is_wifi = (
+        bool(wifi_bssid)
+        or "wifi" in label_text
+        or "wi-fi" in label_text
+        or "802.11" in label_text
+    )
 
-    if "wifi" in label_text or "802.11" in label_text:
+    if is_wifi:
+        wifi_frequency_mhz = wifi.get(
+            "frequency_mhz"
+        )
+        if wifi_frequency_mhz in (
+            None,
+            "",
+            "None",
+        ):
+            wifi_frequency_mhz = frequency_mhz
+
         if search_similar_targets:
+            target_bssids = {}
+            target_ids = []
+
+            allowed_target_ids = {
+                str(value)
+                for value in (similar_target_ids or [])
+                if str(value or "").strip()
+            }
+            if target_id:
+                allowed_target_ids.add(target_id)
+
+            for (
+                known_target_id,
+                known_target,
+            ) in (
+                getattr(
+                    component,
+                    "targets",
+                    {},
+                )
+                or {}
+            ).items():
+                if (
+                    allowed_target_ids
+                    and str(known_target_id)
+                    not in allowed_target_ids
+                ):
+                    continue
+
+                if not isinstance(
+                    known_target,
+                    dict,
+                ):
+                    continue
+
+                known_wifi = (
+                    known_target.get("wifi")
+                    or {}
+                )
+                known_bssid = str(
+                    known_wifi.get("bssid")
+                    or ""
+                ).strip()
+
+                known_classification = (
+                    known_target.get(
+                        "classification"
+                    )
+                    or {}
+                )
+                known_label = str(
+                    known_classification.get(
+                        "display_label"
+                    )
+                    or ""
+                ).lower()
+
+                if (
+                    not known_bssid
+                    and "wifi"
+                    not in known_label
+                    and "wi-fi"
+                    not in known_label
+                    and "802.11"
+                    not in known_label
+                ):
+                    continue
+
+                target_ids.append(
+                    str(known_target_id)
+                )
+
+                if known_bssid:
+                    target_bssids[
+                        known_bssid
+                    ] = str(
+                        known_target_id
+                    )
+
             return {
-                "mode": "wifi_all",
-                "plugin_name": WIFI_PLUGIN,
-                "action_name": "wifi_geolocate_all",
+                "mode": "wifi_similar",
+                "plugin_name": "WiFi",
+                "action_name":
+                    "wifi_geolocate_all",
                 "parameters": {
-                    "target_ids": _get_known_wifi_target_ids(component),
-                    "search_similar_targets": True,
+                    "target_bssids":
+                        target_bssids,
+                    "target_ids":
+                        target_ids,
+                    "max_targets": 0,
+                    "measurement_spacing_m":
+                        20.0,
+                    "meas_every_s": 0.2,
+                    "aggregation_window_s":
+                        3.0,
+                    "search_similar_targets":
+                        True,
                 },
             }
 
         return {
             "mode": "wifi_target",
-            "plugin_name": WIFI_PLUGIN,
-            "action_name": "wifi_geolocate_target",
+            "plugin_name": "WiFi",
+            "action_name":
+                "wifi_geolocate_target",
             "parameters": {
                 "target_id": target_id,
-                "search_similar_targets": False,
+                "bssid": wifi_bssid,
+                "channel":
+                    wifi.get("channel"),
+                "frequency_mhz":
+                    wifi_frequency_mhz,
+                "measurement_spacing_m":
+                    20.0,
+                "meas_every_s": 0.2,
+                "aggregation_window_s":
+                    3.0,
             },
         }
 
-    if "lfm" in label_text or "beacon" in label_text:
+    if (
+        "lfm" in label_text
+        or "beacon" in label_text
+    ):
         return {
             "mode": "lfm_beacon",
-            "plugin_name": BASE_PLUGIN,
-            "action_name": "lfm_beacon_geolocate",
+            "plugin_name": "Base",
+            "action_name":
+                "lfm_beacon_geolocate",
             "parameters": {
                 "target_id": target_id,
-                "freq_mhz": float(frequency_mhz) if frequency_mhz not in (None, "") else 433.0,
-                "min_detection_interval_s": 1.0,
+                "freq_mhz": (
+                    float(frequency_mhz)
+                    if frequency_mhz
+                    not in (None, "")
+                    else 433.0
+                ),
+                "gain_default": 40.0,
+                "min_detection_interval_s":
+                    1.0,
+                "path_loss_n": 2.2,
             },
         }
 
-    if frequency_mhz not in (None, ""):
+    if frequency_mhz not in (
+        None,
+        "",
+    ):
         return {
-            "mode": "generic_frequency",
-            "plugin_name": BASE_PLUGIN,
-            "action_name": "usrp_b2x0_geolocate",
+            "mode":
+                "generic_frequency",
+            "plugin_name": "Base",
+            "action_name":
+                "usrp_b2x0_geolocate",
             "parameters": {
                 "target_id": target_id,
-                "frequency_mhz": float(frequency_mhz) if frequency_mhz not in (None, "") else 2412.0,
+                "frequency_mhz":
+                    float(frequency_mhz),
                 "emit_every_s": 1.0,
                 "meas_every_s": 0.20,
                 "sample_rate": 1e6,
                 "gain_db": 65.0,
                 "detect_frequency": True,
-                "description": f"Generic frequency geolocation for {target_id}",
+                "description":
+                    f"Generic frequency "
+                    f"geolocation for "
+                    f"{target_id}",
             },
         }
 
@@ -8062,7 +9301,7 @@ async def geolocate_target_stop(
     requester_type: str = "tak",
     parameters: dict = None,
 ):
-    """Stop geolocation for a target across all associated nodes."""
+    """Stop one Target geolocation session by its exact operation ID."""
     try:
         component.logger.info(
             f"geolocate_target_stop called with parameters={parameters}"
@@ -8071,26 +9310,275 @@ async def geolocate_target_stop(
         if parameters is None:
             parameters = {}
 
-        target_id = parameters.get("target_id")
-
+        target_id = str(
+            parameters.get("target_id")
+            or ""
+        ).strip()
         if not target_id:
             component.logger.error(
                 "geolocate_target_stop missing target_id"
             )
             return
 
-        target = component.targets.get(target_id)
-
+        target = component.targets.get(
+            target_id
+        )
         if not target:
             component.logger.error(
                 f"Target not found for target_id={target_id}"
             )
             return
 
-        geolocate = target.get("geolocate") or {}
+        geolocate = (
+            target.get("geolocate")
+            or {}
+        )
+        mode = str(
+            geolocate.get("mode")
+            or ""
+        )
+        action = str(
+            geolocate.get("action")
+            or ""
+        )
+        operation_id = str(
+            geolocate.get(
+                "operation_id"
+            )
+            or ""
+        ).strip()
+
+        is_shared_wifi = (
+            action == "wifi_geolocate_all"
+            and bool(operation_id)
+        )
+
+        if is_shared_wifi:
+            shared_target_ids = []
+            shared_node_uids = set()
+
+            for (
+                peer_target_id,
+                peer_target,
+            ) in component.targets.items():
+                peer_geo = (
+                    peer_target.get(
+                        "geolocate"
+                    )
+                    or {}
+                )
+
+                if (
+                    str(
+                        peer_geo.get(
+                            "operation_id"
+                        )
+                        or ""
+                    ).strip()
+                    == operation_id
+                    and str(
+                        peer_geo.get(
+                            "action"
+                        )
+                        or ""
+                    )
+                    == "wifi_geolocate_all"
+                ):
+                    shared_target_ids.append(
+                        peer_target_id
+                    )
+                    shared_node_uids.update(
+                        peer_geo.get(
+                            "node_uids"
+                        )
+                        or []
+                    )
+
+            if not shared_target_ids:
+                shared_target_ids = [
+                    target_id
+                ]
+
+            component.logger.info(
+                f"Stopping shared Wi-Fi geolocation "
+                f"operation_id={operation_id} "
+                f"mode={mode} "
+                f"targets={shared_target_ids} "
+                f"nodes={sorted(shared_node_uids)}"
+            )
+
+            for (
+                peer_target_id
+            ) in shared_target_ids:
+                peer_target = (
+                    component.targets.get(
+                        peer_target_id
+                    )
+                )
+                if not peer_target:
+                    continue
+
+                peer_geo = (
+                    peer_target.get(
+                        "geolocate"
+                    )
+                    or {}
+                )
+                _set_target_geolocate_status(
+                    peer_target,
+                    status="stopping",
+                    mode=peer_geo.get(
+                        "mode",
+                        "",
+                    ),
+                    plugin=peer_geo.get(
+                        "plugin",
+                        "",
+                    ),
+                    action=peer_geo.get(
+                        "action",
+                        "",
+                    ),
+                    node_uids=list(
+                        peer_geo.get(
+                            "node_uids"
+                        )
+                        or []
+                    ),
+                    error="",
+                )
+
+                await targetPatch(
+                    component,
+                    target_id=(
+                        peer_target_id
+                    ),
+                    patch={},
+                )
+
+            stopped_nodes = []
+            failed_nodes = []
+
+            for node_uid in sorted(
+                shared_node_uids
+            ):
+                try:
+                    await stop_plugin_operation(
+                        component,
+                        node_uid,
+                        operation_id,
+                    )
+                    stopped_nodes.append(
+                        node_uid
+                    )
+                except Exception as stop_err:
+                    component.logger.error(
+                        f"Failed stopping shared Wi-Fi geolocation "
+                        f"operation_id={operation_id} "
+                        f"on node={node_uid}: {stop_err}"
+                    )
+                    component.logger.debug(
+                        traceback.format_exc()
+                    )
+                    failed_nodes.append(
+                        node_uid
+                    )
+
+            for (
+                peer_target_id
+            ) in shared_target_ids:
+                peer_target = (
+                    component.targets.get(
+                        peer_target_id
+                    )
+                )
+                if not peer_target:
+                    continue
+
+                peer_geo = (
+                    peer_target.get(
+                        "geolocate"
+                    )
+                    or {}
+                )
+                previous_state = (
+                    peer_geo.get(
+                        "previous_state",
+                        "",
+                    )
+                    or "detected"
+                )
+                had_detections = bool(
+                    peer_geo.get(
+                        "had_detections",
+                        False,
+                    )
+                )
+
+                peer_target[
+                    "state"
+                ] = (
+                    "detected"
+                    if had_detections
+                    else previous_state
+                )
+
+                _set_target_geolocate_status(
+                    peer_target,
+                    status="idle",
+                    mode="",
+                    plugin="",
+                    action="",
+                    node_uids=[],
+                    error=(
+                        ""
+                        if not failed_nodes
+                        else (
+                            "partial_stop_failed:"
+                            + ",".join(
+                                failed_nodes
+                            )
+                        )
+                    ),
+                )
+                peer_target[
+                    "geolocate"
+                ][
+                    "operation_id"
+                ] = ""
+                peer_target[
+                    "geolocate"
+                ][
+                    "previous_state"
+                ] = ""
+                peer_target[
+                    "geolocate"
+                ][
+                    "had_detections"
+                ] = False
+
+                await targetPatch(
+                    component,
+                    target_id=(
+                        peer_target_id
+                    ),
+                    patch={},
+                )
+
+            component.logger.info(
+                f"Shared Wi-Fi geolocation stopped "
+                f"operation_id={operation_id}; "
+                f"targets={shared_target_ids}; "
+                f"stopped_nodes={stopped_nodes}; "
+                f"failed_nodes={failed_nodes}"
+            )
+            return
 
         node_uid_list = list(
-            geolocate.get("node_uids") or []
+            geolocate.get(
+                "node_uids"
+            )
+            or []
         )
 
         if not node_uid_list:
@@ -8100,13 +9588,21 @@ async def geolocate_target_stop(
             )
 
             previous_state = (
-                geolocate.get("previous_state", "")
-                or target.get("state", "")
+                geolocate.get(
+                    "previous_state",
+                    "",
+                )
+                or target.get(
+                    "state",
+                    "",
+                )
                 or "imported"
             )
-
             had_detections = bool(
-                geolocate.get("had_detections", False)
+                geolocate.get(
+                    "had_detections",
+                    False,
+                )
             )
 
             target["state"] = (
@@ -8124,66 +9620,118 @@ async def geolocate_target_stop(
                 node_uids=[],
                 error="",
             )
-
-            target["geolocate"]["previous_state"] = ""
-            target["geolocate"]["had_detections"] = False
+            target[
+                "geolocate"
+            ][
+                "operation_id"
+            ] = ""
+            target[
+                "geolocate"
+            ][
+                "previous_state"
+            ] = ""
+            target[
+                "geolocate"
+            ][
+                "had_detections"
+            ] = False
 
             await targetPatch(
                 component,
                 target_id=target_id,
                 patch={},
             )
-
             return
 
         _set_target_geolocate_status(
             target,
             status="stopping",
-            mode=geolocate.get("mode", ""),
-            plugin=geolocate.get("plugin", ""),
-            action=geolocate.get("action", ""),
+            mode=geolocate.get(
+                "mode",
+                "",
+            ),
+            plugin=geolocate.get(
+                "plugin",
+                "",
+            ),
+            action=geolocate.get(
+                "action",
+                "",
+            ),
             node_uids=node_uid_list,
             error="",
         )
-
         await targetPatch(
             component,
             target_id=target_id,
             patch={},
         )
 
+        if not operation_id:
+            component.logger.error(
+                f"Cannot stop geolocation for target_id={target_id}: "
+                "missing operation_id"
+            )
+            _set_target_geolocate_status(
+                target,
+                status="error",
+                mode=geolocate.get(
+                    "mode",
+                    "",
+                ),
+                plugin=geolocate.get(
+                    "plugin",
+                    "",
+                ),
+                action=geolocate.get(
+                    "action",
+                    "",
+                ),
+                node_uids=node_uid_list,
+                error="missing_operation_id",
+            )
+            await targetPatch(
+                component,
+                target_id=target_id,
+                patch={},
+            )
+            return
+
         stopped_nodes = []
         failed_nodes = []
 
-        try:
-            component.logger.info(
-                f"Stopping geolocation for target_id={target_id} "
-                f"on node_uids={node_uid_list}"
-            )
+        component.logger.info(
+            f"Stopping geolocation operation_id={operation_id} "
+            f"for target_id={target_id} "
+            f"on node_uids={node_uid_list}"
+        )
 
-            await stop_all_plugin_operations(
-                component,
-                requester_uid,
-                requester_type,
-                node_uid_list,
-            )
+        for node_uid in node_uid_list:
+            try:
+                await stop_plugin_operation(
+                    component,
+                    node_uid,
+                    operation_id,
+                )
+                stopped_nodes.append(
+                    node_uid
+                )
+            except Exception as stop_err:
+                component.logger.error(
+                    f"Failed stopping geolocation "
+                    f"operation_id={operation_id} "
+                    f"on node_uid={node_uid}: {stop_err}"
+                )
+                component.logger.debug(
+                    traceback.format_exc()
+                )
+                failed_nodes.append(
+                    node_uid
+                )
 
-            stopped_nodes = list(node_uid_list)
-
-        except Exception as stop_err:
-            component.logger.error(
-                f"Failed stopping geolocation for "
-                f"target_id={target_id}: {stop_err}"
-            )
-
-            component.logger.debug(
-                traceback.format_exc()
-            )
-
-            failed_nodes = list(node_uid_list)
-
-        target = component.targets.get(target_id)
-
+        target = component.targets.get(
+            target_id
+        )
         if not target:
             component.logger.error(
                 f"Target disappeared before final idle update: "
@@ -8191,34 +9739,51 @@ async def geolocate_target_stop(
             )
             return
 
-        geolocate = target.get("geolocate") or {}
-
+        geolocate = (
+            target.get("geolocate")
+            or {}
+        )
         previous_state = (
-            geolocate.get("previous_state", "")
+            geolocate.get(
+                "previous_state",
+                "",
+            )
             or "imported"
         )
-
         had_detections = bool(
-            geolocate.get("had_detections", False)
+            geolocate.get(
+                "had_detections",
+                False,
+            )
         )
 
-        if failed_nodes and not stopped_nodes:
+        if (
+            failed_nodes
+            and not stopped_nodes
+        ):
             _set_target_geolocate_status(
                 target,
                 status="error",
-                mode=geolocate.get("mode", ""),
-                plugin=geolocate.get("plugin", ""),
-                action=geolocate.get("action", ""),
+                mode=geolocate.get(
+                    "mode",
+                    "",
+                ),
+                plugin=geolocate.get(
+                    "plugin",
+                    "",
+                ),
+                action=geolocate.get(
+                    "action",
+                    "",
+                ),
                 node_uids=node_uid_list,
                 error="stop_failed",
             )
-
             await targetPatch(
                 component,
                 target_id=target_id,
                 patch={},
             )
-
             return
 
         target["state"] = (
@@ -8237,12 +9802,29 @@ async def geolocate_target_stop(
             error=(
                 ""
                 if not failed_nodes
-                else f"partial_stop_failed:{','.join(failed_nodes)}"
+                else (
+                    "partial_stop_failed:"
+                    + ",".join(
+                        failed_nodes
+                    )
+                )
             ),
         )
-
-        target["geolocate"]["previous_state"] = ""
-        target["geolocate"]["had_detections"] = False
+        target[
+            "geolocate"
+        ][
+            "operation_id"
+        ] = ""
+        target[
+            "geolocate"
+        ][
+            "previous_state"
+        ] = ""
+        target[
+            "geolocate"
+        ][
+            "had_detections"
+        ] = False
 
         await targetPatch(
             component,
@@ -8262,32 +9844,9 @@ async def geolocate_target_stop(
         component.logger.error(
             f"Error in geolocate_target_stop: {e}"
         )
-
         component.logger.debug(
             traceback.format_exc()
         )
-
-        target_id = (
-            parameters.get("target_id")
-            if parameters
-            else None
-        )
-
-        if target_id:
-            target = component.targets.get(target_id)
-
-            if target:
-                _set_target_geolocate_status(
-                    target,
-                    status="error",
-                    error="exception",
-                )
-
-                await targetPatch(
-                    component,
-                    target_id=target_id,
-                    patch={},
-                )
 
 
 def _normalize_promoted_detection(detection):
@@ -8657,126 +10216,182 @@ async def promoteDetectionToTarget(
     requester_uid: str = "",
     requester_callsign: str = "",
 ):
-    """
-    Convert an existing structured detection directly into an authoritative target.
-    No plugin action or Sensor Node execution is involved.
-    """
+    """Convert one structured Detection into an authoritative Target."""
     detection = _normalize_promoted_detection(detection)
-
     if not detection:
-        component.logger.warning(
-            "promoteDetectionToTarget received an empty detection"
-        )
+        component.logger.warning("promoteDetectionToTarget received an empty detection")
         return
 
     node_uid = str(detection.get("node_uid") or "").strip()
-
     if not node_uid:
-        component.logger.warning(
-            "promoteDetectionToTarget detection missing node_uid"
-        )
+        component.logger.warning("promoteDetectionToTarget detection missing node_uid")
         return
 
     target_id = str(uuid.uuid4())
     frequency_mhz = _promoted_detection_frequency_mhz(detection)
+    observation_time = detection.get("observation_time") or detection.get("timestamp") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    lat = _promoted_detection_float(detection, "latitude", "lat")
+    lon = _promoted_detection_float(detection, "longitude", "lon")
+    alt = _promoted_detection_float(detection, "hae_meters", "hae_m", "alt", "altitude")
 
-    observation_time = (
-        detection.get("timestamp")
-        or detection.get("observation_time")
-        or datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        )
-    )
+    detector_text = " ".join(str(detection.get(key) or "") for key in ("detector", "detection_kind", "source", "protocol")).lower()
+    bssid = str(detection.get("bssid") or detection.get("ap_bssid") or "").strip()
+    is_wifi = bool(bssid) or "wifi" in detector_text or "wi-fi" in detector_text or "802.11" in detector_text
 
-    lat = _promoted_detection_float(
-        detection,
-        "latitude",
-        "lat",
-    )
-
-    lon = _promoted_detection_float(
-        detection,
-        "longitude",
-        "lon",
-    )
-
-    alt = _promoted_detection_float(
-        detection,
-        "hae_meters",
-        "hae_m",
-        "alt",
-    )
-
-    location = {}
-
-    if lat is not None:
-        location["lat"] = lat
-
-    if lon is not None:
-        location["lon"] = lon
-
-    if alt is not None:
-        location["hae_m"] = alt
-
-    if observation_time:
-        location["timestamp"] = observation_time
-
-    location["source"] = "wintak_detection_promotion"
-
-    display_label = _promoted_detection_label(detection)
+    if is_wifi and bssid:
+        normalized_bssid = bssid.replace(":", "").replace("-", "").strip().lower()
+        if len(normalized_bssid) == 12 and all(c in "0123456789abcdef" for c in normalized_bssid):
+            existing_target_id = ""
+            for candidate_target_id, candidate_target in (getattr(component, "targets", {}) or {}).items():
+                if not isinstance(candidate_target, dict):
+                    continue
+                candidate_bssid = str((candidate_target.get("wifi") or {}).get("bssid") or "")
+                candidate_bssid = candidate_bssid.replace(":", "").replace("-", "").strip().lower()
+                if candidate_bssid == normalized_bssid:
+                    existing_target_id = str(candidate_target_id)
+                    break
+            target_id = existing_target_id or f"wifiap-{normalized_bssid}"
 
     classification = {
-        "display_label": display_label,
+        "display_label": "Wi-Fi AP" if is_wifi else _promoted_detection_label(detection),
         "confidence": None,
         "source": "promoted_detection",
-        "candidates": [],
+        "candidates": ([{"source": "wifi", "label": "802.11 Access Point"}] if is_wifi else []),
     }
 
     summary = {
         "source": "detection_promotion",
         "promoted_by_uid": requester_uid or "",
         "promoted_by_callsign": requester_callsign or "",
-        "detection_event_uid": str(
-            detection.get("event_uid") or ""
-        ),
+        "detection_event_uid": str(detection.get("event_uid") or ""),
         "attributes": dict(detection),
     }
+
+    if lat is not None and lon is not None:
+        summary["observation_location"] = {
+            "lat": lat,
+            "lon": lon,
+            "hae_m": alt,
+            "timestamp": observation_time,
+            "semantics": "receiver_observation" if is_wifi else "detection_location",
+        }
+
+    patch = {
+        "node_uid": node_uid,
+        "state": "detected",
+        "frequency_mhz": frequency_mhz,
+        "classification": classification,
+        "summary": summary,
+    }
+
+    if is_wifi:
+        rssi_dbm = detection.get("rssi_dbm")
+        if rssi_dbm in (None, ""):
+            rssi_dbm = detection.get("power_dbm")
+
+        wifi = {
+            "bssid": bssid,
+            "ssid": str(detection.get("ssid") or ""),
+            "channel": detection.get("channel"),
+            "band": str(detection.get("band") or ""),
+            "frequency_mhz": frequency_mhz,
+            "rssi_dbm": rssi_dbm,
+            "encryption": str(detection.get("encryption") or ""),
+            "vendor": str(detection.get("vendor") or detection.get("manufacturer") or ""),
+            "last_observation_time": observation_time,
+        }
+        patch["wifi"] = {key: value for key, value in wifi.items() if value not in (None, "")}
+    else:
+        location = {"source": "detection_promotion"}
+        if lat is not None:
+            location["lat"] = lat
+        if lon is not None:
+            location["lon"] = lon
+        if alt is not None:
+            location["hae_m"] = alt
+        if observation_time:
+            location["timestamp"] = observation_time
+        patch["location"] = location
 
     history_entry = {
         "event": "promoted_from_detection",
         "source": "detection_promotion",
         "requester_uid": requester_uid or "",
         "requester_callsign": requester_callsign or "",
-        "detection_event_uid": str(
-            detection.get("event_uid") or ""
-        ),
-        "timestamp": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ),
+        "detection_event_uid": str(detection.get("event_uid") or ""),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     }
 
-    await targetUpdate(
-        component,
-        node_uid=node_uid,
-        target_id=target_id,
-        source_soi_id="",
-        frequency_mhz=frequency_mhz,
-        state="detected",
-        artifact_id="",
-        classification=classification,
-        location=location,
-        history_entry=history_entry,
-        summary=summary,
-        lat=lat,
-        lon=lon,
-        alt=alt,
-        observation_time=observation_time,
-    )
+    await targetPatch(component, target_id=target_id, patch=patch, history_entry=history_entry, artifact_id="")
+    component.logger.info(f"Promoted detection to target target_id={target_id}, node_uid={node_uid}, wifi={is_wifi}")
 
-    component.logger.info(
-        f"Promoted detection to target "
-        f"target_id={target_id}, node_uid={node_uid}"
-    )
+
+async def deleteSoi(
+    component: object,
+    soi_key: str = "",
+    node_uid: str = "",
+    soi_id: str = "",
+):
+    """Delete one authoritative SOI record while preserving artifacts."""
+    soi_key = str(soi_key or "").strip()
+    node_uid = str(node_uid or "").strip()
+    soi_id = str(soi_id or "").strip()
+
+    if not soi_key and soi_id:
+        soi_key = f"{node_uid}:{soi_id}"
+
+    removed = None
+
+    if soi_key:
+        removed = component.sois.pop(soi_key, None)
+
+    if removed is None and soi_id:
+        for candidate_key, candidate in list(component.sois.items()):
+            if not isinstance(candidate, dict):
+                continue
+
+            if str(candidate.get("soi_id", "") or "").strip() != soi_id:
+                continue
+
+            candidate_node_uid = str(
+                candidate.get("node_uid", "")
+                or ""
+            ).strip()
+
+            if node_uid and candidate_node_uid != node_uid:
+                continue
+
+            soi_key = candidate_key
+            removed = component.sois.pop(candidate_key, None)
+            break
+
+    parameters = {
+        "soi_key": soi_key,
+        "node_uid": node_uid,
+        "soi_id": soi_id,
+        "success": removed is not None,
+    }
+
+    message = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "soiDeleted",
+        fissure.comms.MessageFields.PARAMETERS:
+            parameters,
+    }
+
+    if component.dashboard_connected:
+        await component.dashboard_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            message,
+        )
+
+    if removed is not None:
+        component.logger.info(
+            "Deleted SOI record "
+            f"soi_key={soi_key}, soi_id={soi_id}"
+        )
 
 
 async def sendSoisListTak(

@@ -247,15 +247,46 @@ class OperationMain(Operation):
             await _send("FAILED", "classification_failed", {"folder": capture_folder, "error": repr(e)})
             return
 
-        # 5) Zip + register artifact
+        # 5) Register evidence files as one multi-file Artifact
         try:
-            artifact_id = self.artifact_manager.create_zip_artifact_from_folder(
-                source_id=str(params.get("source_id", "")),
+            artifact_files = []
+            file_metadata = {}
+
+            for i in range(bin_count):
+                path = os.path.join(capture_folder, f"iq_chunk_{i:03d}.bin")
+                if os.path.isfile(path):
+                    artifact_files.append(path)
+                    file_metadata[path] = {
+                        "role": "iq_burst",
+                        "content_type": "application/octet-stream",
+                        "frequency_mhz": freq,
+                        "data_type": data_type,
+                    }
+
+            for j in range(json_count):
+                path = os.path.join(capture_folder, f"meta_{j:02d}.json")
+                if os.path.isfile(path):
+                    artifact_files.append(path)
+                    file_metadata[path] = {"role": "operation_metadata", "content_type": "application/json"}
+
+            features_path = os.path.join(capture_folder, "tsi_features.json")
+            if os.path.isfile(features_path):
+                artifact_files.append(features_path)
+                file_metadata[features_path] = {"role": "feature_report", "content_type": "application/json"}
+
+            classification_path = os.path.join(capture_folder, "classification_report.json")
+            if os.path.isfile(classification_path):
+                artifact_files.append(classification_path)
+                file_metadata[classification_path] = {"role": "classification", "content_type": "application/json"}
+
+            artifact_id = self.artifact_manager.create_artifact(
+                source_id=str(params.get("source_id") or self.node_uid),
                 operation_id=operation_id,
-                folder=capture_folder,
+                files=artifact_files,
                 name=f"{self.description} evidence @ {freq} MHz",
+                artifact_type="soi_evidence",
                 metadata={
-                    "role": "soi_evidence_dummy_v1",
+                    "role": "soi_evidence_dummy_v2",
                     "frequency_mhz": freq,
                     "soi_id": soi_id,
                     "operation_id": operation_id,
@@ -263,7 +294,8 @@ class OperationMain(Operation):
                     "model_confidence": self.model_confidence,
                     "description": self.description,
                 },
-                arc_prefix=f"soi_{operation_id}",
+                relations=[("soi", soi_id, "source_capture")],
+                file_metadata=file_metadata,
             )
 
             await _send(
@@ -272,13 +304,19 @@ class OperationMain(Operation):
                 {
                     "folder": capture_folder,
                     "artifact_id": artifact_id,
+                    "artifact_links": [{
+                        "artifact_id": artifact_id,
+                        "operation_id": operation_id,
+                        "role": "source_iq",
+                        "source": "dummy_soi",
+                    }],
                     "model_classification": self.model_label,
                     "model_confidence": self.model_confidence,
                 },
             )
 
         except Exception as e:
-            await _send("FAILED", "evidence_bundle_failed", {"folder": capture_folder, "error": repr(e)})
+            await _send("FAILED", "evidence_register_failed", {"folder": capture_folder, "error": repr(e)})
             return
 
         self.logger.info(

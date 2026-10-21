@@ -1,72 +1,38 @@
 #!/usr/bin/env python3
-"""
-FISSURE – Wi-Fi Geolocate All Known Targets
--------------------------------------------
-Purpose
--------
-Observe all visible Wi-Fi APs, but emit detections only for target IDs that are
-already known and explicitly passed in via parameters.
+"""FISSURE - Wi-Fi Geolocate All Visible APs
 
-This operation does NOT create/update targets directly.
-It emits detections for known Wi-Fi targets only.
-
-Expected "parameters" keys:
-- target_ids: list[str] or comma-separated str  REQUIRED for useful behavior
-- search_similar_targets: bool                 accepted but not used to create targets
-- wifi_interface: str
-- mon_suffix: str
-- airo_prefix: str
-- gpsd_host: str
-- gpsd_port: int
-- gps_refresh_interval: float
-- wifi_refresh_interval: float
-- min_detection_interval_s: float
-- log_dir: str
-- source_id: str
+Sparse-environment bulk geolocation. Discovers visible APs, creates or reuses
+canonical Wi-Fi Targets, and emits reduced target-associated RSSI observations.
+HIPRFISR owns geometry, multilateration, and the authoritative Target solution.
 """
 
-import os
-import sys
+import asyncio
 import csv
 import glob
-import time
 import json
-import asyncio
-import subprocess
-import signal
-import shutil
 import logging
-import inspect
-from typing import Dict, Optional, List, Any, Callable, Union, Tuple
-
-# -----------------------------------------------------------------------------
-# Plugin path bootstrap
-# -----------------------------------------------------------------------------
+import os
+import shutil
+import statistics
+import math
+import subprocess
+import sys
+import time
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FISSURE_REPO_ROOT = os.path.abspath(os.path.join(PLUGIN_ROOT, "..", ".."))
 SCRIPTS_DIR = os.path.join(PLUGIN_ROOT, "scripts")
 WIFI_LIB_DIR = os.path.join(SCRIPTS_DIR, "wifi_lib")
-RESOURCES_DIR = os.path.join(PLUGIN_ROOT, "resources")
-
-for path in (FISSURE_REPO_ROOT, PLUGIN_ROOT, SCRIPTS_DIR, WIFI_LIB_DIR, RESOURCES_DIR):
+for path in (FISSURE_REPO_ROOT, PLUGIN_ROOT, SCRIPTS_DIR, WIFI_LIB_DIR):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from fissure.utils.plugins.operations import Operation
-    from fissure.utils import FISSURE_ROOT
-except ImportError:
-    if FISSURE_REPO_ROOT not in sys.path:
-        sys.path.insert(0, FISSURE_REPO_ROOT)
-    if PLUGIN_ROOT not in sys.path:
-        sys.path.insert(0, PLUGIN_ROOT)
-
-    from fissure.utils.plugins.operations import Operation
-    from fissure.utils import FISSURE_ROOT
+from fissure.utils.plugins.operations import Operation
 
 
 MON_SUFFIX_DEFAULT = "mon"
+CALLBACK_TIMEOUT_S = 2.0
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -76,7 +42,6 @@ def _to_bool(value: Any, default: bool = False) -> bool:
         return value
     if isinstance(value, (int, float)):
         return bool(value)
-
     text = str(value).strip().lower()
     if text in {"1", "true", "t", "yes", "y", "on"}:
         return True
@@ -85,204 +50,145 @@ def _to_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def _default_log_dir() -> str:
-    return os.path.join(FISSURE_ROOT, "logs", "plugins", "WiFi")
+def _normalize_bssid(bssid: str) -> str:
+    return (bssid or "").replace(":", "").replace("-", "").strip().lower()
+
+
+def _channel_info(channel: Optional[int]) -> Tuple[str, Optional[float]]:
+    if channel is None:
+        return "", None
+    if 1 <= channel <= 14:
+        return "2.4GHz", 2484.0 if channel == 14 else 2412.0 + 5.0 * (channel - 1)
+    if 30 <= channel <= 177:
+        return "5GHz", 5000.0 + 5.0 * channel
+    if 1 <= channel <= 233:
+        return "6GHz", 5950.0 + 5.0 * channel
+    return "", None
 
 
 class OperationMain(Operation):
-    def __init__(
-        self,
-        node_uid: str = "",
-        logger: logging.Logger = logging.getLogger(__name__),
-        alert_callback: Union[Callable, None] = None,
-        tak_cot_callback: Union[Callable, None] = None,
-        detection_callback: Union[Callable, None] = None,
-        status_callback: Union[Callable, None] = None,
-        target_callback: Union[Callable, None] = None,
-        artifact_manager=None,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        super().__init__(
-            node_uid=node_uid,
-            logger=logger,
-            alert_callback=alert_callback,
-            tak_cot_callback=tak_cot_callback,
-            detection_callback=detection_callback,
-            status_callback=status_callback,
-            target_callback=target_callback,
-            artifact_manager=artifact_manager,
+    def __init__(self, node_uid: str = "", logger: logging.Logger = logging.getLogger(__name__), alert_callback=None, tak_cot_callback=None, detection_callback=None, status_callback=None, target_callback=None, position_callback=None, artifact_manager=None, parameters: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(node_uid=node_uid, logger=logger, alert_callback=alert_callback, tak_cot_callback=tak_cot_callback, detection_callback=detection_callback, status_callback=status_callback, target_callback=target_callback, position_callback=position_callback, artifact_manager=artifact_manager)
+        self.parameters = parameters or {}
+        self.source_id = str(node_uid or "").strip() or "sensor_node"
+        self.wifi_interface = "wlx00c0caa744fc"
+        self.mon_suffix = MON_SUFFIX_DEFAULT
+        self.airo_prefix = "/tmp/airodump"
+        self.airo_csv_glob = self.airo_prefix + "-*.csv"
+        self.meas_every_s = 0.5
+        self.aggregation_window_s = 3.0
+        self.cluster_radius_m = 8.0
+        self.measurement_spacing_m = 20.0
+        self.max_targets = 25
+        self.auto_create_targets = True
+        self.target_bssids: Dict[str, str] = {}
+
+        self._airodump_proc = None
+        self._airodump_iface_in_use = None
+        self._announced_targets: Set[str] = set()
+        self._last_source_seen_by_bssid: Dict[str, str] = {}
+        self._clusters_by_bssid: Dict[str, Dict[str, Any]] = {}
+        self._last_emitted_position_by_bssid: Dict[
+            str,
+            Tuple[float, float],
+        ] = {}
+        self._emitted_measurement_count_by_bssid: Dict[str, int] = {}
+        self._limit_logged = False
+
+    def _apply_parameters_from_runner(self) -> None:
+        p = self.parameters if isinstance(self.parameters, dict) else {}
+        self.source_id = str(p.get("source_id") or p.get("node_uid") or self.node_uid or "sensor_node").strip()
+        self.wifi_interface = str(p.get("wifi_interface", self.wifi_interface) or self.wifi_interface)
+        self.mon_suffix = str(p.get("mon_suffix", self.mon_suffix) or self.mon_suffix)
+        self.airo_prefix = str(p.get("airo_prefix", self.airo_prefix) or self.airo_prefix)
+        self.airo_csv_glob = self.airo_prefix + "-*.csv"
+        self.meas_every_s = max(
+            0.2,
+            float(
+                p.get(
+                    "meas_every_s",
+                    p.get(
+                        "wifi_refresh_interval",
+                        self.meas_every_s,
+                    ),
+                )
+            ),
+        )
+        self.aggregation_window_s = max(
+            0.5,
+            float(
+                p.get(
+                    "aggregation_window_s",
+                    self.aggregation_window_s,
+                )
+            ),
+        )
+        self.measurement_spacing_m = max(
+            self.cluster_radius_m,
+            float(
+                p.get(
+                    "measurement_spacing_m",
+                    self.measurement_spacing_m,
+                )
+            ),
+        )
+        self.max_targets = max(
+            0,
+            int(float(p.get("max_targets", self.max_targets))),
         )
 
-        self.parameters: Dict[str, Any] = parameters or {}
+        target_bssids = p.get("target_bssids", {})
+        if isinstance(target_bssids, str):
+            try:
+                target_bssids = json.loads(target_bssids)
+            except Exception:
+                target_bssids = {}
 
-        self.target_ids: List[str] = []
-        self.search_similar_targets: bool = False
-        self.source_id: str = str(node_uid or "").strip() or "sensor_node"
+        self.target_bssids = {}
+        if isinstance(target_bssids, dict):
+            for bssid, target_id in target_bssids.items():
+                bssid_norm = _normalize_bssid(str(bssid))
+                target_id = str(target_id or "").strip()
+                if bssid_norm and target_id:
+                    self.target_bssids[bssid_norm] = target_id
 
-        self.wifi_interface: str = "wlx00c0caa744fc"
-        self.mon_suffix: str = MON_SUFFIX_DEFAULT
+        default_auto_create = not bool(self.target_bssids)
+        self.auto_create_targets = _to_bool(p.get("auto_create_targets"), default=default_auto_create)
+        if self.target_bssids:
+            self.auto_create_targets = False
 
-        self.airo_prefix: str = "/tmp/airodump"
-        self.airo_csv_glob: str = self.airo_prefix + "-*.csv"
+        self.resource_args = {"wifi_interface": self.wifi_interface}
 
-        self.gpsd_host: str = "127.0.0.1"
-        self.gpsd_port: int = 2947
-        self.gps_refresh_interval: float = 3.0
-        self.wifi_refresh_interval: float = 0.5
-        self.min_detection_interval_s: float = 1.0
 
-        self.log_dir: str = _default_log_dir()
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        self._gps_stop = asyncio.Event()
-        self._current_position = {"lat": None, "lon": None, "alt": 0.0}
-
-        self._airodump_proc: Optional[asyncio.subprocess.Process] = None
-        self._airodump_iface_in_use: Optional[str] = None
-
-        # map normalized bssid -> target_id
-        self._known_wifi_targets: Dict[str, str] = {}
-
-        # throttle duplicate emissions
-        self._last_emit_time_by_bssid: Dict[str, float] = {}
-
-    # ------------------------------------------------------------------
-    # Compatibility helpers
-    # ------------------------------------------------------------------
     def _should_stop(self) -> bool:
         if getattr(self, "_stop", False):
             return True
         ev = getattr(self, "stop_event", None)
         if ev is not None:
             try:
-                return ev.is_set()
+                return bool(ev.is_set())
             except Exception:
                 pass
         return False
 
-    async def _maybe_await(self, result):
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    async def _callback_with_timeout(self, callback: Callable, *args, timeout: float = 2.0, **kwargs):
+    async def _call(self, callback: Callable, *args, **kwargs):
         result = callback(*args, **kwargs)
-        if inspect.isawaitable(result):
-            return await asyncio.wait_for(result, timeout=timeout)
+        if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
+            return await asyncio.wait_for(result, timeout=CALLBACK_TIMEOUT_S)
         return result
 
-    async def _set_status(self, message: str) -> None:
+    async def _set_status(self, status: str) -> None:
         if not self.status_callback:
             return
         try:
-            await self._callback_with_timeout(self.status_callback, message, timeout=2.0)
+            await self._call(self.status_callback, status)
         except Exception:
             self.logger.exception("status_callback failed")
 
-    def _apply_parameters_from_runner(self) -> None:
-        p = getattr(self, "parameters", None)
-        self.logger.info(f"_apply_parameters_from_runner self.parameters={p!r} type={type(p)}")
-
-        if not isinstance(p, dict):
-            return
-
-        raw_target_ids = p.get("target_ids", [])
-        if isinstance(raw_target_ids, list):
-            self.target_ids = [str(x).strip() for x in raw_target_ids if str(x).strip()]
-        elif isinstance(raw_target_ids, str) and raw_target_ids.strip():
-            # Accept one target ID or comma/semicolon-separated target IDs from schemas.
-            parts = str(raw_target_ids).replace(";", ",").split(",")
-            self.target_ids = [part.strip() for part in parts if part.strip()]
-        else:
-            self.target_ids = []
-
-        self.search_similar_targets = _to_bool(
-            p.get("search_similar_targets", self.search_similar_targets),
-            default=self.search_similar_targets,
-        )
-
-        self.source_id = (
-            str(p.get("source_id", "") or "").strip()
-            or str(self.node_uid or "").strip()
-            or "sensor_node"
-        )
-
-        self.wifi_interface = str(p.get("wifi_interface", self.wifi_interface) or self.wifi_interface)
-        self.mon_suffix = str(p.get("mon_suffix", self.mon_suffix) or self.mon_suffix)
-
-        self.airo_prefix = str(p.get("airo_prefix", self.airo_prefix) or self.airo_prefix)
-        self.airo_csv_glob = self.airo_prefix + "-*.csv"
-
-        self.gpsd_host = str(p.get("gpsd_host", self.gpsd_host) or self.gpsd_host)
-        self.gpsd_port = int(p.get("gpsd_port", self.gpsd_port))
-        self.gps_refresh_interval = float(p.get("gps_refresh_interval", self.gps_refresh_interval))
-        self.wifi_refresh_interval = float(p.get("wifi_refresh_interval", self.wifi_refresh_interval))
-        self.min_detection_interval_s = float(p.get("min_detection_interval_s", self.min_detection_interval_s))
-
-        self.log_dir = str(p.get("log_dir", self.log_dir) or self.log_dir)
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        self.resource_args = {"wifi_interface": self.wifi_interface}
-
     @staticmethod
     def get_resources(dev: str = "") -> Dict[str, Any]:
-        return {
-            "usrp": {
-                "type": "Alfa",
-                "model": "",
-                "serial": dev,
-                "description": "Alfa Card",
-                "required": True,
-            }
-        }
+        return {"usrp": {"type": "Alfa", "model": "", "serial": dev, "description": "Alfa Card", "required": True}}
 
-    # -----------------------
-    # Target helpers
-    # -----------------------
-    @staticmethod
-    def _normalize_bssid(bssid: str) -> str:
-        return (bssid or "").replace(":", "").replace("-", "").strip().lower()
-
-    def _derive_bssid_from_target_id(self, target_id: str) -> Tuple[str, str]:
-        """
-        Convert target_id like wifiap-24F5A28FC8DF into:
-            normalized: 24f5a28fc8df
-            colonized:  24:F5:A2:8F:C8:DF
-        """
-        if not target_id:
-            return "", ""
-
-        raw = target_id.strip()
-        if raw.lower().startswith("wifiap-"):
-            raw = raw[7:]
-
-        raw = raw.replace(":", "").replace("-", "").strip()
-        if len(raw) != 12:
-            return "", ""
-
-        norm = raw.lower()
-        colon = ":".join(raw[i:i + 2] for i in range(0, 12, 2)).upper()
-        return norm, colon
-
-    def _build_known_wifi_target_map(self) -> None:
-        self._known_wifi_targets = {}
-
-        for target_id in self.target_ids:
-            bssid_norm, bssid_colon = self._derive_bssid_from_target_id(target_id)
-            if not bssid_norm:
-                self.logger.warning(
-                    f"Skipping target_id={target_id}; could not derive Wi-Fi BSSID"
-                )
-                continue
-
-            self._known_wifi_targets[bssid_norm] = target_id
-            self.logger.info(
-                f"Known Wi-Fi target: target_id={target_id}, bssid={bssid_colon}"
-            )
-
-    # -----------------------
-    # Airodump helpers
-    # -----------------------
     def _iface(self, cmd: List[str]) -> None:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
@@ -291,26 +197,53 @@ class OperationMain(Operation):
             self._iface(["sudo", "ip", "link", "set", self.wifi_interface, "down"])
             self._iface(["sudo", "iw", "dev", self.wifi_interface, "set", "type", "managed"])
             self._iface(["sudo", "ip", "link", "set", self.wifi_interface, "up"])
-            self.logger.info(f"Restored {self.wifi_interface} to managed mode")
-        except Exception as e:
-            self.logger.warning(f"Restore failed: {e}")
+        except Exception as exc:
+            self.logger.warning(f"Restore failed: {exc}")
 
-    def _kill_existing_airodump(self) -> None:
+    def _kill_existing_airodump(self, signal_name: str = "TERM") -> None:
+        signal_name = "KILL" if str(signal_name).upper() == "KILL" else "TERM"
+
         patterns = [
             f"airodump-ng.*--write {self.airo_prefix}",
             f"airodump-ng.* {self.wifi_interface}{self.mon_suffix}",
             f"airodump-ng.* {self.wifi_interface}",
         ]
-        for pat in patterns:
+
+        for pattern in patterns:
             try:
-                subprocess.run(
-                    ["sudo", "pkill", "-f", pat],
+                result = subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "pkill",
+                        f"-{signal_name}",
+                        "-f",
+                        pattern,
+                    ],
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
                     check=False,
                 )
-            except Exception:
-                pass
+
+                stderr = (result.stderr or "").strip()
+
+                if "password is required" in stderr.lower():
+                    self.logger.warning(
+                        "Passwordless sudo is not configured for pkill; "
+                        "unable to stop privileged airodump-ng"
+                    )
+                    return
+
+                if result.returncode == 0:
+                    return
+
+            except Exception as exc:
+                self.logger.debug(
+                    f"Unable to stop airodump-ng with pattern "
+                    f"{pattern!r}: {exc}"
+                )
 
     async def _start_airodump(self) -> Tuple[Optional[asyncio.subprocess.Process], Optional[str]]:
         airodump_path = shutil.which("airodump-ng")
@@ -319,74 +252,35 @@ class OperationMain(Operation):
             return None, None
 
         mon = self.wifi_interface + self.mon_suffix
-
         self._kill_existing_airodump()
-
         self._iface(["sudo", "ip", "link", "set", mon, "down"])
         self._iface(["sudo", "iw", "dev", mon, "del"])
-
-        use: Optional[str] = None
-        add = subprocess.run(
-            ["sudo", "iw", "dev", self.wifi_interface, "interface", "add", mon, "type", "monitor"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
+        add = subprocess.run(["sudo", "iw", "dev", self.wifi_interface, "interface", "add", mon, "type", "monitor"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
         if add.returncode == 0:
             self._iface(["sudo", "ip", "link", "set", mon, "up"])
             use = mon
-            self.logger.info(f"Created monitor interface: {mon}")
         else:
-            err = (add.stderr or "").strip()
-            self.logger.warning(f"Monitor sub-iface create failed: {err}")
-            self.logger.info(f"Fallback: switching {self.wifi_interface} to monitor mode")
-            self._iface(["sudo", "ip", "link", "set", self.wifi_interface, "down"])
-            subprocess.run(
-                ["sudo", "iw", "dev", self.wifi_interface, "set", "type", "monitor"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
+            self.logger.info(
+                f"Monitor sub-interface unavailable; using {self.wifi_interface} "
+                f"directly in monitor mode"
             )
+            self._iface(["sudo", "ip", "link", "set", self.wifi_interface, "down"])
+            self._iface(["sudo", "iw", "dev", self.wifi_interface, "set", "type", "monitor"])
             self._iface(["sudo", "ip", "link", "set", self.wifi_interface, "up"])
             use = self.wifi_interface
 
-        cmd = [
-            "sudo", "-n",
-            airodump_path,
-            "--berlin", "1",
-            "--write-interval", "1",
-            "--band", "abg",
-            "--output-format", "csv",
-            "--write", self.airo_prefix,
-            use,
-        ]
-
-        self.logger.info(f"Launching airodump-ng on {use} (dual-band)")
+        cmd = ["sudo", "-n", airodump_path, "--berlin", "1", "--write-interval", "1", "--band", "abg", "--output-format", "csv", "--write", self.airo_prefix, use]
         self.logger.info(f"Command: {' '.join(cmd)}")
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-            close_fds=True,
-        )
-
+        proc = await asyncio.create_subprocess_exec(*cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, start_new_session=True, close_fds=True)
         await asyncio.sleep(2.0)
         if proc.returncode is not None:
-            err_b = b""
+            err = b""
             try:
-                err_b = await asyncio.wait_for(proc.stderr.read(), timeout=0.5)
+                err = await asyncio.wait_for(proc.stderr.read(), timeout=0.5)
             except Exception:
                 pass
-            self.logger.error(
-                f"airodump-ng failed to start (rc={proc.returncode}). "
-                f"stderr={err_b.decode(errors='ignore')}"
-            )
+            self.logger.error(f"airodump-ng failed to start rc={proc.returncode}: {err.decode(errors='ignore')}")
             return None, None
-
         return proc, use
 
     def _latest_csv_path(self) -> Optional[str]:
@@ -394,357 +288,768 @@ class OperationMain(Operation):
         return max(files, key=os.path.getmtime) if files else None
 
     def _read_airodump_rows_once(self) -> List[Dict[str, Any]]:
-        """
-        Reads the latest CSV once and returns AP rows as dicts.
-
-        Current parsing:
-        - BSSID     -> r[0]
-        - channel   -> r[3]
-        - privacy   -> r[5]
-        - power     -> r[8]
-        - ESSID     -> r[13]
-        """
-        csv_path = self._latest_csv_path()
-        if not csv_path:
+        path = self._latest_csv_path()
+        if not path:
             return []
-
         try:
-            with open(csv_path, errors="ignore", newline="") as f:
-                rows = [r for r in csv.reader(f) if len(r) > 1]
+            with open(path, errors="ignore", newline="") as f:
+                rows = list(csv.reader(f))
         except Exception:
             return []
 
-        idx = None
-        for i, r in enumerate(rows):
-            if r and r[0].strip().upper() == "BSSID":
-                idx = i
-                break
+        idx = next((i for i, r in enumerate(rows) if r and r[0].strip().upper() == "BSSID"), None)
         if idx is None:
             return []
 
-        out: List[Dict[str, Any]] = []
+        out = []
         for r in rows[idx + 1:]:
-            if not r or all(c.strip() == "" for c in r):
+            if not r or all(not c.strip() for c in r):
                 break
 
-            try:
-                bssid = r[0].strip()
-                channel_text = r[3].strip() if len(r) > 3 else ""
-                privacy = r[5].strip() if len(r) > 5 else ""
-                power_text = r[8].strip() if len(r) > 8 else ""
-                ssid = r[13].strip(" ,\t\r\n") if len(r) > 13 else ""
+            first = r[0].strip()
+            if first.upper() == "STATION MAC":
+                break
+            if len(r) < 14:
+                continue
 
-                if (not ssid) or (ssid.lower() in ("<hidden>", "broadcast", "unknown")):
+            try:
+                bssid = first
+                bssid_norm = _normalize_bssid(bssid)
+                if len(bssid_norm) != 12 or any(c not in "0123456789abcdef" for c in bssid_norm):
+                    continue
+
+                channel = int(float(r[3].strip())) if r[3].strip() else None
+                if channel is not None and channel <= 0:
+                    channel = None
+
+                rssi = float(r[8].strip()) if r[8].strip() else None
+                ssid = r[13].strip(" ,\t\r\n")
+                if ssid.lower() in {"<hidden>", "broadcast", "unknown"}:
                     ssid = ""
 
-                channel = None
-                if channel_text:
-                    try:
-                        channel = int(float(channel_text))
-                    except Exception:
-                        channel = None
-
-                rssi = None
-                if power_text:
-                    try:
-                        rssi = float(power_text)
-                    except Exception:
-                        rssi = None
-
-                band = ""
-                freq_mhz = None
-                if channel is not None:
-                    if 1 <= channel <= 14:
-                        band = "2.4GHz"
-                        if channel == 14:
-                            freq_mhz = 2484.0
-                        else:
-                            freq_mhz = 2412.0 + 5.0 * (channel - 1)
-                    elif 30 <= channel <= 177:
-                        band = "5GHz"
-                        freq_mhz = 5000.0 + 5.0 * channel
-
+                band, frequency_mhz = _channel_info(channel)
                 out.append({
                     "ssid": ssid,
                     "bssid": bssid,
-                    "bssid_norm": self._normalize_bssid(bssid),
+                    "bssid_norm": bssid_norm,
                     "channel": channel,
                     "band": band,
-                    "frequency_mhz": freq_mhz,
+                    "frequency_mhz": frequency_mhz,
                     "rssi_dbm": rssi,
-                    "encryption": privacy,
+                    "encryption": r[5].strip(),
+                    "source_last_seen": r[2].strip(),
                 })
             except Exception:
                 continue
-
         return out
 
-    # -----------------------
-    # GPS loop
-    # -----------------------
-    async def _gps_loop(self) -> None:
-        self.logger.info("Starting GPS loop (GPSD)")
-        buf = ""
+    def _snapshot_position(self) -> Dict[str, Any]:
+        try:
+            position = self.position_callback()
+        except Exception as exc:
+            self.logger.warning(f"Position callback failed: {exc}")
+            return {"valid": False, "source": ""}
 
-        while (not self._should_stop()) and (not self._gps_stop.is_set()):
+        if not isinstance(position, dict) or not position.get("valid", False):
+            return {
+                "valid": False,
+                "source": (
+                    str(position.get("source") or "")
+                    if isinstance(position, dict)
+                    else ""
+                ),
+            }
+
+        lat = position.get("latitude")
+        lon = position.get("longitude")
+        alt = position.get("altitude")
+        if lat is None or lon is None:
+            return {
+                "valid": False,
+                "source": str(position.get("source") or ""),
+            }
+
+        return {
+            "valid": True,
+            "source": str(position.get("source") or ""),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "altitude": float(alt or 0.0),
+        }
+
+    @staticmethod
+    def _distance_m(
+        lat1: float,
+        lon1: float,
+        lat2: float,
+        lon2: float,
+    ) -> float:
+        radius_m = 6371000.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = (
+            math.sin(dphi / 2.0) ** 2
+            + math.cos(phi1)
+            * math.cos(phi2)
+            * math.sin(dlambda / 2.0) ** 2
+        )
+        return radius_m * 2.0 * math.atan2(
+            math.sqrt(a),
+            math.sqrt(max(0.0, 1.0 - a)),
+        )
+
+    def _start_cluster(
+        self,
+        bssid_norm: str,
+        row: Dict[str, Any],
+        position: Dict[str, Any],
+        now_epoch: float,
+    ) -> None:
+        self._clusters_by_bssid[bssid_norm] = {
+            "anchor_latitude": float(position["latitude"]),
+            "anchor_longitude": float(position["longitude"]),
+            "anchor_altitude": float(position.get("altitude") or 0.0),
+            "location_source": str(position.get("source") or ""),
+            "started_monotonic": time.monotonic(),
+            "first_sample_epoch": now_epoch,
+            "last_sample_epoch": now_epoch,
+            "settled": False,
+            "samples": [],
+        }
+        self._add_cluster_sample(
+            bssid_norm,
+            row,
+            now_epoch,
+        )
+
+    def _add_cluster_sample(
+        self,
+        bssid_norm: str,
+        row: Dict[str, Any],
+        now_epoch: float,
+    ) -> None:
+        cluster = self._clusters_by_bssid.get(bssid_norm)
+        if not cluster:
+            return
+
+        rssi = row.get("rssi_dbm")
+        if rssi is None:
+            return
+
+        cluster["samples"].append({
+            "timestamp_epoch": now_epoch,
+            "rssi_dbm": float(rssi),
+            "row": dict(row),
+        })
+        cluster["last_sample_epoch"] = now_epoch
+
+    def _cluster_far_enough_to_emit(
+        self,
+        bssid_norm: str,
+        cluster: Dict[str, Any],
+    ) -> bool:
+        previous = self._last_emitted_position_by_bssid.get(
+            bssid_norm
+        )
+        if previous is None:
+            return True
+
+        distance = self._distance_m(
+            float(previous[0]),
+            float(previous[1]),
+            float(cluster["anchor_latitude"]),
+            float(cluster["anchor_longitude"]),
+        )
+        return distance >= self.measurement_spacing_m
+
+    async def _finalize_cluster(
+        self,
+        bssid_norm: str,
+        reason: str,
+    ) -> bool:
+        cluster = self._clusters_by_bssid.get(bssid_norm)
+        if not cluster or cluster.get("settled", False):
+            return False
+
+        cluster["settled"] = True
+        samples = cluster.get("samples") or []
+        if not samples:
+            return False
+
+        if not self._cluster_far_enough_to_emit(
+            bssid_norm,
+            cluster,
+        ):
+            self.logger.debug(
+                f"Skipping Wi-Fi geolocation cluster "
+                f"bssid={bssid_norm} within "
+                f"{self.measurement_spacing_m:.1f} m of the "
+                "last emitted receiver position"
+            )
+            return False
+
+        values = [
+            float(sample["rssi_dbm"])
+            for sample in samples
+        ]
+        median_rssi = float(statistics.median(values))
+        latest_sample = max(
+            samples,
+            key=lambda sample: float(
+                sample.get("timestamp_epoch") or 0.0
+            ),
+        )
+        row = latest_sample.get("row") or {}
+
+        target_id = self._target_id_for_row(row)
+        if not target_id:
+            return False
+
+        lat = float(cluster["anchor_latitude"])
+        lon = float(cluster["anchor_longitude"])
+        alt = float(cluster.get("anchor_altitude") or 0.0)
+
+        await self._emit_detection(
+            target_id=target_id,
+            row=row,
+            rssi_dbm=median_rssi,
+            sample_count=len(values),
+            lat=lat,
+            lon=lon,
+            alt=alt,
+            timestamp_epoch=float(
+                latest_sample.get("timestamp_epoch")
+                or time.time()
+            ),
+            location_source=str(
+                cluster.get("location_source") or ""
+            ),
+        )
+
+        self._last_emitted_position_by_bssid[
+            bssid_norm
+        ] = (lat, lon)
+        count = (
+            self._emitted_measurement_count_by_bssid.get(
+                bssid_norm,
+                0,
+            )
+            + 1
+        )
+        self._emitted_measurement_count_by_bssid[
+            bssid_norm
+        ] = count
+
+        self.logger.info(
+            f"Wi-Fi geolocate all measurement "
+            f"target={target_id} "
+            f"bssid={row.get('bssid', '')} "
+            f"rssi_median={median_rssi:.1f} dBm "
+            f"samples={len(values)} "
+            f"position=({lat:.6f}, {lon:.6f}) "
+            f"position_count={count} "
+            f"reason={reason}"
+        )
+        return True
+
+    async def _finalize_ready_clusters(self) -> None:
+        now = time.monotonic()
+        for bssid_norm, cluster in list(
+            self._clusters_by_bssid.items()
+        ):
+            if cluster.get("settled", False):
+                continue
+            if (
+                now
+                - float(cluster["started_monotonic"])
+            ) >= self.aggregation_window_s:
+                await self._finalize_cluster(
+                    bssid_norm,
+                    "aggregation_window",
+                )
+
+    async def _finalize_all_clusters(self) -> None:
+        for bssid_norm in list(
+            self._clusters_by_bssid.keys()
+        ):
             try:
-                reader, writer = await asyncio.open_connection(self.gpsd_host, self.gpsd_port)
-                writer.write(b'?WATCH={"enable":true,"json":true}\n')
-                await writer.drain()
+                await self._finalize_cluster(
+                    bssid_norm,
+                    "operation_stopped",
+                )
+            except Exception:
+                self.logger.exception(
+                    "Unable to finalize Wi-Fi geolocation cluster "
+                    f"for bssid={bssid_norm}"
+                )
 
-                while (not self._should_stop()) and (not self._gps_stop.is_set()):
-                    data = await reader.read(4096)
-                    if not data:
-                        await asyncio.sleep(0.5)
-                        continue
 
-                    buf += data.decode(errors="ignore")
+    async def _stop_runtime(self) -> None:
+        if self._airodump_proc and self._airodump_proc.returncode is None:
+            self._kill_existing_airodump("TERM")
 
-                    while "\n" in buf:
-                        if self._should_stop() or self._gps_stop.is_set():
-                            break
-
-                        line, buf = buf.split("\n", 1)
-                        if not line.strip():
-                            continue
-
-                        try:
-                            msg = json.loads(line)
-                        except Exception:
-                            continue
-
-                        if msg.get("class") == "TPV" and msg.get("mode", 0) >= 2:
-                            lat = msg.get("lat")
-                            lon = msg.get("lon")
-                            alt = msg.get("altMSL") or msg.get("altHAE") or 0.0
-
-                            if lat is not None and lon is not None:
-                                self._current_position.update({
-                                    "lat": float(lat),
-                                    "lon": float(lon),
-                                    "alt": float(alt),
-                                })
+            try:
+                await asyncio.wait_for(
+                    self._airodump_proc.wait(),
+                    timeout=1.5,
+                )
+            except asyncio.TimeoutError:
+                self._kill_existing_airodump("KILL")
 
                 try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                    await asyncio.wait_for(
+                        self._airodump_proc.wait(),
+                        timeout=0.75,
+                    )
+                except asyncio.TimeoutError:
+                    self.logger.warning(
+                        "airodump-ng did not exit after SIGKILL"
+                    )
 
-            except Exception as e:
-                self.logger.warning(f"GPS error: {e}")
-                await asyncio.sleep(2.0)
+        await self._to_thread_compat(self._restore_managed)
 
-    # -----------------------
-    # Detection emit
-    # -----------------------
+        # Direct discover-and-geolocate mode owns the Target lifecycle it
+        # created. Search Similar mode is owned by HIPRFISR and must not be
+        # independently cleared here.
+        if (
+            not self.target_bssids
+            and self.target_callback
+            and self._announced_targets
+        ):
+            updated_time = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(),
+            )
+
+            for target_id in sorted(self._announced_targets):
+                try:
+                    await self._call(
+                        self.target_callback,
+                        target_id=target_id,
+                        patch={
+                            "state": "detected",
+                            "geolocate": {
+                                "status": "idle",
+                                "mode": "",
+                                "plugin": "",
+                                "action": "",
+                                "node_uids": [],
+                                "error": "",
+                                "operation_id": "",
+                                "updated_time": updated_time,
+                                "previous_state": "",
+                                "had_detections": False,
+                            },
+                        },
+                        history_entry={
+                            "event": "wifi_geolocate_all_stopped",
+                            "source": "wifi_geolocate_all",
+                            "operation_id": self.opid,
+                        },
+                        artifact_id="",
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        f"Unable to clear geolocation state for "
+                        f"target_id={target_id}: {exc}"
+                    )
+
+        await self._set_status("Idle")
+
+    async def _to_thread_compat(self, func, *args, **kwargs):
+        if hasattr(asyncio, "to_thread"):
+            return await asyncio.to_thread(func, *args, **kwargs)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+    def _target_id_for_row(self, row: Dict[str, Any]) -> Optional[str]:
+        bssid_norm = str(row.get("bssid_norm") or "").strip()
+        if not bssid_norm:
+            return None
+        if self.target_bssids:
+            return self.target_bssids.get(bssid_norm)
+        if not self.auto_create_targets:
+            return None
+        return f"wifiap-{bssid_norm}"
+
+    async def _ensure_target(
+        self,
+        row: Dict[str, Any],
+        position: Dict[str, Any],
+    ) -> Optional[str]:
+        target_id = self._target_id_for_row(row)
+        if not target_id:
+            return None
+
+        # Search Similar / known-target mode is already lifecycle-managed by
+        # HIPRFISR geolocate_target_start()/stop().
+        if self.target_bssids:
+            return target_id
+
+        if target_id in self._announced_targets:
+            return target_id
+
+        if self.max_targets and len(self._announced_targets) >= self.max_targets:
+            if not self._limit_logged:
+                self.logger.warning(
+                    f"Wi-Fi geolocate all reached max auto-created "
+                    f"Targets={self.max_targets}; additional BSSIDs will be ignored"
+                )
+                self._limit_logged = True
+            return None
+
+        if not self.target_callback:
+            return None
+
+        now = time.time()
+        updated_time = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            time.gmtime(now),
+        )
+        lat = position.get("latitude")
+        lon = position.get("longitude")
+        alt = position.get("altitude")
+
+        summary = {
+            "source": "wifi_geolocate_all",
+            "auto_created": True,
+        }
+        if lat is not None and lon is not None:
+            summary["observation_location"] = {
+                "lat": float(lat),
+                "lon": float(lon),
+                "hae_m": float(alt or 0.0),
+                "timestamp": now,
+                "source": str(position.get("source") or ""),
+                "semantics": "receiver_observation",
+            }
+
+        wifi = {
+            "bssid": row.get("bssid", ""),
+            "ssid": row.get("ssid", ""),
+            "channel": row.get("channel"),
+            "band": row.get("band", ""),
+            "frequency_mhz": row.get("frequency_mhz"),
+            "rssi_dbm": row.get("rssi_dbm"),
+            "encryption": row.get("encryption", ""),
+            "last_observation_time": now,
+        }
+
+        patch = {
+            "node_uid": str(self.node_uid),
+            "state": "tracking",
+            "frequency_mhz": row.get("frequency_mhz"),
+            "classification": {
+                "display_label": "Wi-Fi AP",
+                "source": "wifi_geolocate_all",
+                "candidates": [
+                    {
+                        "source": "wifi",
+                        "label": "802.11 Access Point",
+                    }
+                ],
+            },
+            "wifi": {
+                key: value
+                for key, value in wifi.items()
+                if value not in (None, "")
+            },
+            "summary": summary,
+            "geolocate": {
+                "status": "running",
+                "mode": "wifi_all",
+                "plugin": "WiFi",
+                "action": "wifi_geolocate_all",
+                "node_uids": [str(self.node_uid)],
+                "error": "",
+                "operation_id": str(self.opid),
+                "updated_time": updated_time,
+                "previous_state": "detected",
+                "had_detections": False,
+            },
+        }
+
+        history_entry = {
+            "event": "wifi_geolocate_all_started",
+            "source": "wifi_geolocate_all",
+            "operation_id": self.opid,
+            "bssid": row.get("bssid", ""),
+        }
+
+        await self._call(
+            self.target_callback,
+            target_id=target_id,
+            patch=patch,
+            history_entry=history_entry,
+            artifact_id="",
+        )
+
+        self._announced_targets.add(target_id)
+        return target_id
+
     async def _emit_detection(
         self,
         *,
         target_id: str,
-        ssid: str,
-        bssid: str,
-        channel: Optional[int],
-        band: str,
-        frequency_mhz: Optional[float],
-        rssi_dbm: Optional[float],
-        encryption: str,
+        row: Dict[str, Any],
+        rssi_dbm: float,
+        sample_count: int,
+        lat: float,
+        lon: float,
+        alt: float,
+        timestamp_epoch: float,
+        location_source: str,
     ) -> None:
-        ts_epoch = time.time()
+        if not self.detection_callback:
+            return
+
+        frequency_mhz = row.get("frequency_mhz")
+        try:
+            frequency_hz = (
+                int(round(float(frequency_mhz) * 1e6))
+                if frequency_mhz is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            frequency_hz = None
 
         detection = {
             "kind": "detection",
             "event_type": "detection",
             "detection_kind": "wifi_geolocate_all",
+            "detector": "wifi_geolocate_all",
             "target_id": target_id,
             "node_uid": str(self.node_uid),
             "source_id": self.source_id,
-            "frequency_hz": int(frequency_mhz * 1e6) if frequency_mhz is not None else None,
-            "frequency_mhz": frequency_mhz,
-            "power_dbm": float(rssi_dbm) if rssi_dbm is not None else None,
-            "timestamp": ts_epoch,
-            "detector": "wifi_geolocate_all",
             "opid": self.opid,
             "operation_id": self.opid,
-            "ssid": ssid,
-            "bssid": bssid,
-            "channel": channel,
-            "band": band,
-            "encryption": encryption,
+            "timestamp": float(timestamp_epoch),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "altitude": float(alt or 0.0),
+            "ssid": row.get("ssid", ""),
+            "bssid": row.get("bssid", ""),
+            "channel": row.get("channel"),
+            "band": row.get("band", ""),
+            "frequency_hz": frequency_hz,
+            "power_dbm": float(rssi_dbm),
+            "metric_units": "dBm",
+            "encryption": row.get("encryption", ""),
+            "aggregation": "median",
+            "aggregation_window_s": float(
+                self.aggregation_window_s
+            ),
+            "aggregation_sample_count": int(sample_count),
+            "spatial_cluster_radius_m": float(
+                self.cluster_radius_m
+            ),
+            "measurement_spacing_m": float(
+                self.measurement_spacing_m
+            ),
+            "source_last_seen": str(
+                row.get("source_last_seen") or ""
+            ),
+            "location_source": location_source,
+            "location_semantics": "receiver_observation",
+            "location_valid": True,
         }
+        await self._call(
+            self.detection_callback,
+            {
+                key: value
+                for key, value in detection.items()
+                if value is not None
+            },
+        )
 
-        detection = {k: v for k, v in detection.items() if v is not None}
-        if self.detection_callback:
-            try:
-                await self._callback_with_timeout(self.detection_callback, detection, timeout=2.0)
-            except Exception:
-                self.logger.exception("detection_callback emit failed")
-        else:
-            self.logger.warning("wifi_geolocate_all has no detection_callback")
-
-        if self.alert_callback:
-            try:
-                await self._callback_with_timeout(
-                    self.alert_callback,
-                    self.node_uid,
-                    self.opid,
-                    (
-                        f"Wi-Fi target measurement: target={target_id}, "
-                        f"SSID={ssid or '<hidden>'}, BSSID={bssid}, "
-                        f"RSSI={rssi_dbm if rssi_dbm is not None else 'n/a'} dBm"
-                    ),
-                    self.logger,
-                    timeout=2.0,
-                )
-            except Exception:
-                self.logger.exception("alert_callback detection emit failed")
-
-    # -----------------------
-    # Main run
-    # -----------------------
     async def run(self) -> None:
-        gps_task: Optional[asyncio.Task] = None
-
         try:
             self._apply_parameters_from_runner()
-            self._build_known_wifi_target_map()
+            if not self.detection_callback:
+                raise RuntimeError(
+                    "wifi_geolocate_all requires detection_callback"
+                )
+            if (
+                self.auto_create_targets
+                and not self.target_callback
+            ):
+                raise RuntimeError(
+                    "wifi_geolocate_all auto-create mode "
+                    "requires target_callback"
+                )
 
-            if not self._known_wifi_targets:
-                raise RuntimeError("wifi_geolocate_all requires at least one valid Wi-Fi target_id in target_ids")
-
-            self.logger.info(
-                f"Starting Wi-Fi geolocate all operation: "
-                f"known_targets={len(self._known_wifi_targets)}, "
-                f"search_similar_targets={self.search_similar_targets}"
+            mode_text = (
+                f"tracking {len(self.target_bssids)} "
+                "known Wi-Fi Targets"
+                if self.target_bssids
+                else "discovering and geolocating visible Wi-Fi APs"
             )
-
             await self._set_status(
-                f"Geolocating {len(self._known_wifi_targets)} known Wi-Fi targets"
+                f"Wi-Fi locate all: {mode_text}"
             )
 
-            gps_task = asyncio.create_task(self._gps_loop())
-
-            self._airodump_proc, self._airodump_iface_in_use = await self._start_airodump()
+            (
+                self._airodump_proc,
+                self._airodump_iface_in_use,
+            ) = await self._start_airodump()
             if not self._airodump_proc:
-                self._gps_stop.set()
                 return
 
             while not self._should_stop():
-                lat = self._current_position.get("lat")
-                lon = self._current_position.get("lon")
-                if lat is None or lon is None:
-                    await asyncio.sleep(self.wifi_refresh_interval)
-                    continue
+                rows = await self._to_thread_compat(
+                    self._read_airodump_rows_once
+                )
+                rows.sort(
+                    key=lambda row: (
+                        float(row.get("rssi_dbm"))
+                        if row.get("rssi_dbm") is not None
+                        else -999.0
+                    ),
+                    reverse=True,
+                )
 
-                rows = await self._to_thread_compat(self._read_airodump_rows_once)
-                if not rows:
-                    await asyncio.sleep(self.wifi_refresh_interval)
-                    continue
-
-                matched_count = 0
+                position = self._snapshot_position()
+                position_valid = bool(
+                    position.get("valid", False)
+                )
+                now_epoch = time.time()
+                visible_tracked = 0
 
                 for row in rows:
-                    if self._should_stop():
-                        break
+                    bssid_norm = str(
+                        row.get("bssid_norm") or ""
+                    ).strip()
+                    rssi = row.get("rssi_dbm")
+                    if not bssid_norm or rssi is None:
+                        continue
 
-                    bssid_norm = row.get("bssid_norm", "")
-                    target_id = self._known_wifi_targets.get(bssid_norm)
+                    if (
+                        self.target_bssids
+                        and bssid_norm
+                        not in self.target_bssids
+                    ):
+                        continue
+
+                    source_last_seen = str(
+                        row.get("source_last_seen") or ""
+                    ).strip()
+                    if not source_last_seen:
+                        continue
+
+                    previous_source_seen = (
+                        self._last_source_seen_by_bssid.get(
+                            bssid_norm
+                        )
+                    )
+                    if previous_source_seen == source_last_seen:
+                        continue
+
+                    # Consume the airodump sighting before position
+                    # validation. A stale cumulative row must never be
+                    # paired later with a newer receiver position.
+                    self._last_source_seen_by_bssid[
+                        bssid_norm
+                    ] = source_last_seen
+
+                    if not position_valid:
+                        continue
+
+                    target_id = await self._ensure_target(
+                        row,
+                        position,
+                    )
                     if not target_id:
                         continue
 
-                    matched_count += 1
+                    visible_tracked += 1
 
-                    now = time.time()
-                    last_emit = self._last_emit_time_by_bssid.get(bssid_norm, 0.0)
-                    if (now - last_emit) < self.min_detection_interval_s:
+                    cluster = self._clusters_by_bssid.get(
+                        bssid_norm
+                    )
+                    if cluster is None:
+                        self._start_cluster(
+                            bssid_norm,
+                            row,
+                            position,
+                            now_epoch,
+                        )
                         continue
 
-                    self._last_emit_time_by_bssid[bssid_norm] = now
-
-                    ssid = row.get("ssid", "")
-                    bssid = row.get("bssid", "")
-                    channel = row.get("channel")
-                    band = row.get("band", "")
-                    frequency_mhz = row.get("frequency_mhz")
-                    rssi_dbm = row.get("rssi_dbm")
-                    encryption = row.get("encryption", "")
-
-                    self.logger.info(
-                        f"Matched known Wi-Fi target {target_id}: "
-                        f"ssid={ssid or '<hidden>'}, bssid={bssid}, channel={channel}, "
-                        f"freq_mhz={frequency_mhz}, rssi_dbm={rssi_dbm}"
+                    distance_from_anchor = self._distance_m(
+                        float(cluster["anchor_latitude"]),
+                        float(cluster["anchor_longitude"]),
+                        float(position["latitude"]),
+                        float(position["longitude"]),
                     )
 
-                    await self._emit_detection(
-                        target_id=target_id,
-                        ssid=ssid,
-                        bssid=bssid,
-                        channel=channel,
-                        band=band,
-                        frequency_mhz=frequency_mhz,
-                        rssi_dbm=rssi_dbm,
-                        encryption=encryption,
-                    )
+                    if (
+                        distance_from_anchor
+                        > self.cluster_radius_m
+                    ):
+                        await self._finalize_cluster(
+                            bssid_norm,
+                            "receiver_moved",
+                        )
+                        self._start_cluster(
+                            bssid_norm,
+                            row,
+                            position,
+                            now_epoch,
+                        )
+                    elif not cluster.get("settled", False):
+                        self._add_cluster_sample(
+                            bssid_norm,
+                            row,
+                            now_epoch,
+                        )
 
-                if matched_count > 0:
+                await self._finalize_ready_clusters()
+
+                if not position_valid:
                     await self._set_status(
-                        f"Tracking {matched_count} known Wi-Fi target matches"
+                        f"Wi-Fi locate all: {mode_text}; "
+                        "waiting for valid Sensor Node position"
+                    )
+                elif self.target_bssids:
+                    await self._set_status(
+                        f"Wi-Fi locate all: "
+                        f"{visible_tracked}/"
+                        f"{len(self.target_bssids)} "
+                        "known Targets updated"
                     )
                 else:
+                    limit_text = (
+                        "unlimited"
+                        if self.max_targets == 0
+                        else str(self.max_targets)
+                    )
                     await self._set_status(
-                        f"Searching for {len(self._known_wifi_targets)} known Wi-Fi targets"
+                        f"Wi-Fi locate all: "
+                        f"{len(self._announced_targets)}/"
+                        f"{limit_text} auto Targets, "
+                        f"{visible_tracked} updated"
                     )
 
-                await asyncio.sleep(self.wifi_refresh_interval)
+                await asyncio.sleep(self.meas_every_s)
 
         except asyncio.CancelledError:
             raise
-        except Exception as e:
-            self.logger.exception(f"Wi-Fi geolocate all operation error: {e}")
+        except Exception as exc:
+            self.logger.exception(
+                f"Wi-Fi geolocate all error: {exc}"
+            )
         finally:
-            self._gps_stop.set()
-
-            if gps_task:
-                try:
-                    gps_task.cancel()
-                    await asyncio.wait_for(gps_task, timeout=3.0)
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-
             try:
-                if self._airodump_proc and self._airodump_proc.returncode is None:
-                    try:
-                        os.killpg(self._airodump_proc.pid, signal.SIGTERM)
-                    except Exception:
-                        self._airodump_proc.terminate()
-                    try:
-                        await asyncio.wait_for(self._airodump_proc.wait(), timeout=3.0)
-                    except asyncio.TimeoutError:
-                        try:
-                            os.killpg(self._airodump_proc.pid, signal.SIGKILL)
-                        except Exception:
-                            self._airodump_proc.kill()
-                        await self._airodump_proc.wait()
+                await self._finalize_all_clusters()
             except Exception:
-                pass
+                self.logger.exception(
+                    "Unable to finalize Wi-Fi geolocation clusters"
+                )
 
-            try:
-                await self._to_thread_compat(self._restore_managed)
-            except Exception:
-                pass
+            await self._stop_runtime()
 
-            await self._set_status("Idle")
-
-            self.logger.info("Wi-Fi geolocate all operation stopped cleanly.")
-
-    async def _to_thread_compat(self, func, *args, **kwargs):
-        if hasattr(asyncio, "to_thread"):
-            return await asyncio.to_thread(func, *args, **kwargs)
-
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
 
 if __name__ == "__main__":

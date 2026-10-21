@@ -412,6 +412,12 @@ class OperationMain(Operation):
         min_samples: Union[str, int] = 1,
         description: str = "File-source Conditioner output",
         node_uid: str = "",
+        managed_input: Optional[Dict[str, Any]] = None,
+        source_artifact_id: str = "",
+        source_artifact_ids: Optional[List[str]] = None,
+        input_soi_id: str = "",
+        input_soi_key: str = "",
+        input_soi_frequency_mhz: Union[str, float] = "",
         logger: logging.Logger = logging.getLogger(__name__),
         alert_callback: Union[Callable, None] = None,
         tak_cot_callback: Union[Callable, None] = None,
@@ -440,6 +446,72 @@ class OperationMain(Operation):
         self.method = str(method or "normal_decay").strip().lower().replace(" ", "_").replace("-", "_")
 
         self.all_filepaths = list(all_filepaths or [])
+        self.managed_input = (
+            dict(managed_input)
+            if isinstance(managed_input, dict)
+            else {}
+        )
+
+        self.source_artifact_ids = [
+            str(value or "").strip()
+            for value in (
+                source_artifact_ids
+                if isinstance(source_artifact_ids, list)
+                else [source_artifact_ids]
+                if source_artifact_ids
+                else []
+            )
+            if str(value or "").strip()
+        ]
+
+        source_artifact_id = str(
+            source_artifact_id
+            or ""
+        ).strip()
+
+        if (
+            source_artifact_id
+            and source_artifact_id not in self.source_artifact_ids
+        ):
+            self.source_artifact_ids.insert(
+                0,
+                source_artifact_id,
+            )
+
+        if not self.source_artifact_ids:
+            managed_artifact_ids = self.managed_input.get(
+                "artifact_ids",
+                [],
+            )
+
+            if not isinstance(managed_artifact_ids, list):
+                managed_artifact_ids = [
+                    managed_artifact_ids
+                ]
+
+            self.source_artifact_ids = [
+                str(value or "").strip()
+                for value in managed_artifact_ids
+                if str(value or "").strip()
+            ]
+
+        self.source_artifact_id = (
+            self.source_artifact_ids[0]
+            if len(self.source_artifact_ids) == 1
+            else ""
+        )
+
+        self.input_soi_id = str(
+            input_soi_id
+            or ""
+        ).strip()
+        self.input_soi_key = str(
+            input_soi_key
+            or ""
+        ).strip()
+        self.input_soi_frequency_mhz = (
+            input_soi_frequency_mhz
+        )
         self.output_directory = str(output_directory or "").strip()
         self.output_mode = self._normalize_output_mode(output_mode)
         self.output_format = self._normalize_output_format(output_format)
@@ -458,6 +530,7 @@ class OperationMain(Operation):
 
         self.threshold = _safe_float(threshold, 0.004)
         self.decay = _safe_float(decay, 0.0002)
+        self.squelch = _safe_float(kwargs.get("squelch", -70.0), -70.0)
         self.max_files = max(1, _safe_int(max_files, 15))
         self.min_samples = max(0, _safe_int(min_samples, 1))
         self.description = str(description or "File-source Conditioner output").strip()
@@ -482,13 +555,22 @@ class OperationMain(Operation):
             f"threshold={self.threshold}, "
             f"decay={self.decay}, "
             f"max_files={self.max_files}, "
-            f"min_samples={self.min_samples}"
+            f"min_samples={self.min_samples}, "
+            f"source_artifact_ids={self.source_artifact_ids}, "
+            f"input_soi_id={self.input_soi_id}, "
         )
 
     async def run(self) -> None:
         await self._set_progress(1, "Starting file signal conditioning")
 
         try:
+            if self.source_type == "artifact":
+                self.all_filepaths = (
+                    self._resolve_node_local_managed_input(
+                        self.managed_input
+                    )
+                )
+
             self._validate()
 
             output_dir = self._destination_dir()
@@ -661,6 +743,88 @@ class OperationMain(Operation):
         finally:
             await self._set_status("Idle")
 
+    def _resolve_node_local_managed_input(self, managed_input: Dict[str, Any]) -> List[str]:
+        """Resolve selected directly registered Artifact members on the Sensor Node."""
+        if not isinstance(managed_input, dict) or not managed_input:
+            raise RuntimeError("Artifact Conditioner input is missing managed_input metadata.")
+
+        artifact_manager = getattr(self, "artifact_manager", None)
+        if artifact_manager is None:
+            raise RuntimeError("Artifact Conditioner input requires artifact_manager.")
+
+        artifact_records = managed_input.get("artifacts", [])
+        artifact_records = artifact_records if isinstance(artifact_records, list) else []
+
+        if not artifact_records:
+            artifact_ids = managed_input.get("artifact_ids", [])
+            artifact_ids = artifact_ids if isinstance(artifact_ids, list) else [artifact_ids]
+            artifact_records = [{"artifact_id": artifact_id, "selected_files": []} for artifact_id in artifact_ids if str(artifact_id or "").strip()]
+
+        resolved_paths = []
+        seen_paths = set()
+        missing_artifacts = []
+        missing_members = []
+
+        for artifact_record in artifact_records:
+            if not isinstance(artifact_record, dict):
+                continue
+
+            artifact_id = str(artifact_record.get("artifact_id") or artifact_record.get("id") or "").strip()
+            if not artifact_id:
+                continue
+
+            artifact = artifact_manager.get_artifact(artifact_id)
+            if artifact is None:
+                missing_artifacts.append(artifact_id)
+                continue
+
+            selected_files = artifact_record.get("selected_files", [])
+            selected_files = selected_files if isinstance(selected_files, list) else []
+            selected_ids = {str(item.get("file_id") or item.get("id") or "").strip() for item in selected_files if isinstance(item, dict) and str(item.get("file_id") or item.get("id") or "").strip()}
+            selected_names = {str(item.get("name") or item.get("filename") or "").strip() for item in selected_files if isinstance(item, dict) and str(item.get("name") or item.get("filename") or "").strip()}
+            matched_ids = set()
+            matched_names = set()
+
+            for artifact_file in artifact.files:
+                if (selected_ids or selected_names) and artifact_file.id not in selected_ids and artifact_file.name not in selected_names and artifact_file.relative_path not in selected_names:
+                    continue
+
+                try:
+                    file_path = artifact_manager.resolve_artifact_file_path(artifact.id, artifact_file.id)
+                except Exception as error:
+                    self.logger.warning("Could not resolve Conditioner Artifact member artifact_id=%s file_id=%s: %s", artifact.id, artifact_file.id, error)
+                    continue
+
+                if not os.path.isfile(file_path):
+                    continue
+
+                if artifact_file.id in selected_ids:
+                    matched_ids.add(artifact_file.id)
+                if artifact_file.name in selected_names:
+                    matched_names.add(artifact_file.name)
+                if artifact_file.relative_path in selected_names:
+                    matched_names.add(artifact_file.relative_path)
+
+                lower = file_path.lower()
+                if not lower.endswith((".iq", ".dat", ".bin", ".raw", ".sigmf-data")):
+                    continue
+
+                if file_path not in seen_paths:
+                    seen_paths.add(file_path)
+                    resolved_paths.append(file_path)
+
+            missing_members.extend(f"{artifact_id}:{file_id}" for file_id in sorted(selected_ids - matched_ids))
+            missing_members.extend(f"{artifact_id}:{name}" for name in sorted(selected_names - matched_names))
+
+        if missing_artifacts:
+            raise RuntimeError("Artifact metadata is not available on the selected Sensor Node: " + ", ".join(missing_artifacts))
+        if missing_members:
+            raise RuntimeError("Selected Artifact files are not available on the selected Sensor Node: " + ", ".join(missing_members))
+        if not resolved_paths:
+            raise RuntimeError("No usable directly registered IQ files resolved from the selected Artifact.")
+
+        return resolved_paths
+    
     def _validate(self) -> None:
         if not self.all_filepaths:
             raise ValueError("No input files supplied in all_filepaths.")
@@ -668,9 +832,14 @@ class OperationMain(Operation):
         if self.max_files <= 0:
             raise ValueError("max_files must be greater than zero.")
 
-        if self.method != "normal_decay":
+        supported_methods = {
+            "normal_decay",
+            "power_squelch",
+        }
+
+        if self.method not in supported_methods:
             raise RuntimeError(
-                f"Unsupported signal_conditioning_file method for first pass: {self.method}"
+                f"Unsupported signal_conditioning_file method: {self.method}"
             )
 
         supported_types = {
@@ -680,7 +849,7 @@ class OperationMain(Operation):
 
         if self.data_type not in supported_types:
             raise RuntimeError(
-                f"Unsupported Conditioner data_type for first pass: {self.data_type}"
+                f"Unsupported Conditioner data_type: {self.data_type}"
             )
 
     def _valid_input_paths(self) -> List[str]:
@@ -777,6 +946,17 @@ class OperationMain(Operation):
         version = get_library_version() or "maint-3.10"
         data_type_dir = _data_type_path_component(self.data_type)
 
+        flow_graph_names = {
+            "normal_decay": "normal_decay.py",
+            "power_squelch": "power_squelch.py",
+        }
+        flow_graph_name = flow_graph_names.get(self.method, "")
+
+        if not flow_graph_name:
+            raise RuntimeError(
+                f"No file-source Conditioner flow graph is mapped for method: {self.method}"
+            )
+
         path = os.path.join(
             PLUGIN_ROOT,
             "flow_graphs",
@@ -785,7 +965,7 @@ class OperationMain(Operation):
             "file_source",
             data_type_dir,
             "burst_tagger",
-            "normal_decay.py",
+            flow_graph_name,
         )
 
         if not os.path.isfile(path):
@@ -799,7 +979,7 @@ class OperationMain(Operation):
         flow_graph_path: str,
         input_path: str,
     ) -> List[str]:
-        return [
+        cmd = [
             python_path,
             flow_graph_path,
             "--filepath",
@@ -808,9 +988,24 @@ class OperationMain(Operation):
             str(self.sample_rate),
             "--threshold",
             str(self.threshold),
-            "--decay",
-            str(self.decay),
         ]
+
+        if self.method == "normal_decay":
+            cmd.extend([
+                "--decay",
+                str(self.decay),
+            ])
+        elif self.method == "power_squelch":
+            cmd.extend([
+                "--squelch",
+                str(self.squelch),
+            ])
+        else:
+            raise RuntimeError(
+                f"No Conditioner command builder is mapped for method: {self.method}"
+            )
+
+        return cmd
 
     async def _run_flow_graph_for_file(
         self,
@@ -1107,8 +1302,12 @@ class OperationMain(Operation):
         output_dir: str,
         rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        uses_sigmf = _conditioner_output_uses_sigmf(self.output_format)
-        uses_zip = _conditioner_output_uses_zip(self.output_format)
+        uses_sigmf = _conditioner_output_uses_sigmf(
+            self.output_format
+        )
+        uses_zip = _conditioner_output_uses_zip(
+            self.output_format
+        )
 
         if uses_sigmf and uses_zip:
             artifact_format = "sigmf_zip_bundle"
@@ -1139,15 +1338,36 @@ class OperationMain(Operation):
             "output_mode": self.output_mode,
             "output_format": self.output_format,
             "prefix": self.prefix,
-            "check_saturation": bool(self.check_saturation),
-            "saturation_check": "full" if self.check_saturation else "none",
+            "check_saturation": bool(
+                self.check_saturation
+            ),
+            "saturation_check": (
+                "full"
+                if self.check_saturation
+                else "none"
+            ),
+
+            "source_artifact_id":
+                self.source_artifact_id,
+            "source_artifact_ids":
+                list(self.source_artifact_ids),
+            "input_soi_id":
+                self.input_soi_id,
+            "input_soi_key":
+                self.input_soi_key,
+            "input_soi_frequency_mhz":
+                self.input_soi_frequency_mhz,
+
             "output_dir": output_dir,
             "files_dir": output_dir,
             "file_count": len(rows),
             "sigmf_enabled": uses_sigmf,
             "zip_enabled": uses_zip,
             "files": rows,
-            "created_at": datetime.datetime.utcnow().isoformat("T") + "Z",
+            "created_at":
+                datetime.datetime.utcnow()
+                .isoformat("T")
+                + "Z",
         }
 
     def _create_zip_bundle(

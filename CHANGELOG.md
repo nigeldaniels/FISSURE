@@ -1,6 +1,639 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 2026-10-19
+
+Add evidence-based packet analysis and protocol validation
+
+### Added
+
+- Added a Packet Analysis workspace for importing extracted messages or local packet data, analyzing selected packets, comparing protocol candidates, and inspecting evidence and decoded fields.
+- Added reusable packet analysis and database-driven format validation with bit-accurate field extraction, structural and integrity checks, and evidence-based Strong, Possible, and Rejected results.
+- Added packet format definitions for TPMS sensor status, Z-Wave Color Switch Set (MAC-only and sync + MAC), and X10 RF command frames, with independent checks rather than length-only identification.
+- Added generic pulse-distance OOK framing to recover interval-encoded packets such as X10 from demodulated symbols.
+- Added a packet-format JSON validation and import tool and Protocol Discovery AI development guidance.
+
+### Changed
+
+- Extended Bitstream & Framing handoff to transfer selected or all extracted messages into Packet Analysis while preserving individual observations and framing context.
+- Updated Library caching to load enabled packet-format definitions for analysis without querying PostgreSQL for each packet.
+- Refined Protocol Discovery layouts and Light, Dark, and Custom styles to present candidate evidence, decoded fields, and validation explanations more clearly.
+- Replaced the distributed PostgreSQL dump with an updated custom-format `.backup` archive and updated operating-system installers to restore it.
+
+### Fixed
+
+- Fixed automatic demodulation misclassifying short, cropped 2-FSK recordings as OOK by using frequency-state timing evidence during modulation selection.
+
+## 2026-10-16
+
+Add automatic bitstream framing and refine signal recovery
+
+### Added
+
+- Added a functional Bitstream & Framing workspace with Demodulation handoff, local bitstream loading, overview and detail plots, Raw/Decoded views, and configurable decoding and framing controls.
+- Added reusable bitstream decoding and framing utilities for polarity handling, Manchester and differential decoding, candidate boundary discovery, OOK burst separation, and repeated-message detection.
+- Added automatic framing evidence from sync patterns, CRC-16 matches, and mixed uncoded-prefix/Manchester-to-differential payloads with CRC-8 and redundant-field checks.
+- Added an extracted-message table with occurrence counts, boundary evidence, raw-chip provenance, and selected-message inspection in Hex, Binary, and ASCII.
+- Added an unframed RF-segment fallback for FSK recordings without identifiable packet boundaries, keeping the recovered data available for inspection without claiming a verified frame.
+
+### Changed
+
+- Improved OOK demodulation with burst-aware symbol timing that independently aligns transmissions while retaining idle gaps for framing.
+- Refined 2-FSK clock estimation and fractional symbol timing for more accurate recovery across longer transmissions.
+- Improved Bitstream & Framing visualization and navigation with selectable message regions, synchronized plots, and preserved viewing context.
+- Refined Protocol Discovery styling across Light, Dark, and Custom themes with button hover states and readable advanced-setting labels.
+
+### Fixed
+
+- Fixed the Demodulation Detected plot being limited to the first 8,000 samples by enabling full-recording navigation with adaptive detail when zooming.
+
+## 2026-10-12
+
+Add Protocol Discovery demodulation and retire legacy attack caching
+
+### Added
+
+- Added a new Protocol Discovery Demodulation workspace with SOI/Artifact and local-file input, SigMF and editable IQ metadata, waveform overview, region selection, and I/Q, magnitude, and instantaneous-frequency views.
+- Added reusable OOK/ASK and binary 2-FSK demodulation with automatic symbol-rate estimation, adjustable decision and timing parameters, and live rate, level, and phase tuning.
+- Added demodulation diagnostics for detected signals, symbols, bits, spectrum, spectrogram, and constellation, plus recovered-bit previews in Bits, Hex, and ASCII formats.
+- Added Bitstream & Framing and Packet Analysis tabs as placeholders for the next stages of the Protocol Discovery workflow.
+
+### Changed
+
+- Reorganized Protocol Discovery navigation to hide obsolete Status, legacy Demodulation, Bit Slicing, Dissectors, and Sniffer tabs while retaining Data Viewer and CRC Calculator.
+- Refined Demodulation plot sizing, navigation controls, empty states, collapsible advanced settings, and Light/Dark/Custom theme consistency.
+- Removed legacy `attacks` and `attack_categories` tables from the Dashboard startup cache and Library Browse options without deleting the underlying database records.
+
+## 2026-10-8
+
+Add radar analysis and refine Inspection plugin workflows
+
+### Added
+
+- Added a RadarAnalysis plugin for Inspection workflows with PDW CSV, log-video float32, and complex float32 IQ analysis, including PRI behavior, pulse width, scan modulation, carrier offset, LFM characterization, Findings, diagnostic plots, and managed Artifacts.
+- Added automatic Inspection data-type inference for common real and complex signal-file extensions such as CF32, CF64, CI/CS, CU, F32/F64, signed integer, and unsigned integer formats.
+
+### Changed
+
+- Updated the Inspection local-file picker to default to All Files while retaining filters for known signal-data formats.
+- Refined Tactical Action parameter spacing to better match the compact Inspection parameter layout.
+- Expanded AI plugin development guidance with Inspection context and operation-ID contracts, managed Artifact storage, schema precision, offline-analysis performance guidance, unsupported/not-observable result semantics, and end-to-end UI validation expectations.
+
+### Fixed
+
+- Fixed Inspection Action parameter rendering so labels and controls remain readable and aligned with responsive widths and as-needed scrolling instead of clipping long parameter names.
+
+## 2026-10-6
+
+Add APRS monitoring and refine Tactical plugin workflows
+
+### Added
+
+- Added an APRS plugin for RTL-SDR-based 144.390 MHz monitoring, with decoded packet Detections, optional station Target creation and updates, moving APRS positions, operation status, and optional packet Artifacts.
+
+### Changed
+
+- Refined AI plugin development guidance to favor meaningful operator-facing Action parameters, keep low-level SDR tuning as Operation defaults when practical, avoid unrequested replay or analysis Actions, preserve only meaningful measurement uncertainty, and verify third-party tool support through the current environment and FISSURE installer patterns when practical.
+- Updated Tactical Action parameter rendering so long labels and controls use as-needed horizontal and vertical scrolling without widening the Tactical sidebar.
+
+### Fixed
+
+- Fixed Tactical Targets already plotted on the map so later Target updates redraw their positions instead of leaving stale markers.
+
+## 2026-10-2
+
+Add RTL433 device discovery and refine AI plugin guidance
+
+### Added
+
+- Added an RTL433 plugin for RTL-SDR-based wireless IoT device discovery, with native Tactical Detections that update by device, decoded measurements, Sensor Node position fallback, operation status, and optional observation Artifacts.
+
+### Changed
+
+- Expanded AI plugin development guidance with Action dropdown conventions, Detection identity and display fields, location and signal-measurement handling, optional Artifact logging, separation of live reception and file playback, and end-to-end Tactical validation.
+
+## 2026-10-1
+
+Add ADS-B tracking and AI development guidance
+
+### Added
+
+- Added an ADS-B plugin with RTL-SDR aircraft tracking and observation logging, native Tactical Detections, aircraft-reported positioning, operation status, and structured logging Artifacts.
+- Added repository-wide AI development instructions in `AGENTS.md` and detailed architecture and plugin guidance under `docs/ai/`.
+- Added `docs/plans/` with an initial plan for execution context and Artifact provenance.
+
+### Changed
+
+- Updated the README with the FISSURE Development video channel and community links, clearer AI development instructions, and collapsible sections for longer setup and usage guidance.
+
+### Fixed
+
+- Fixed Tactical map labels to honor existing optional Detection labels.
+
+## 2026-9-21
+
+Refresh README for current FISSURE workflows and deployment
+
+### Added
+
+- Added GRCon26 presentation and workflow demo links plus new README visuals for distributed architecture, signal analysis workflow, the core information model, the current Tactical Dashboard, and deployment options.
+- Added focused sections for the current workflow model, recent capabilities, intended audiences, AI-assisted development, student and classroom use, and commercial support.
+
+### Changed
+
+- Reorganized and rewrote the README around the current FISSURE architecture, including Sensor Nodes, SOIs, Targets, Detections, Artifacts, Findings, plugin Actions and Operations, Fracture, and distributed deployment workflows.
+- Updated installation and usage guidance for supported platforms, installer modes, remote Sensor Nodes, headless HIPRFISR operation, WSL2, TAK integration, Apptainer deployments, and current hardware support status.
+- Consolidated videos, white papers, blog posts, events, and related links under Resources & Publications, and refreshed the roadmap, documentation, challenge status, contact information, license, testimonials, acknowledgments, and AIS project links.
+
+### Fixed
+
+- Fixed stale README guidance and claims, including the legacy Sensor Node count limit, outdated TAK connection instructions and paths, and older WSL2 setup examples.
+
+## 2026-9-20
+
+Harden Ubuntu installer compatibility and verification
+
+### Changed
+
+- Updated the installer environment to include user-local Python console scripts in PATH during installation and persist the path safely for future shells.
+- Updated Bootable USB installation to use systemd VM detection and the current mkusb toolchain instead of the legacy Systemback/Xenial repository flow.
+- Updated multimon-ng installation to use the current CMake build process and required build dependencies.
+- Updated default installer selections to include Xpra where remote GUI support is used and leave legacy monitor_rtl433 optional due to outdated dependency compatibility.
+
+### Fixed
+
+- Fixed verification for user-local Python tools and packages including Trackerjacker, nwdiag, Grip, pyFDA, PyGPSClient, PyAIS, and Universal Radio Hacker by replacing hardcoded system install paths with PATH- or import-based checks that also work with non-root pip installs and WSL2.
+- Fixed Xpra cleanup commands to remove protected installation files with the required privileges.
+- Fixed Bootable USB verification to pass cleanly when installation is intentionally skipped inside a virtual machine.
+- Fixed multimon-ng reinstall behavior by removing stale source and build state before cloning and rebuilding, and updated verification for the installed executable.
+
+## 2026-9-18
+
+Add CoT session rollover and safe map replacement
+
+### Added
+
+- Added a New CoT Log Session menu action that starts a fresh timestamped HIPRFISR CoT logging session without restarting the Dashboard or interrupting existing session history.
+
+### Fixed
+
+- Fixed saving a map pack with an existing name to require confirmation and replace the previous pack completely, preventing stale tiles and mismatched manifest data from being retained.
+
+## 2026-9-17
+
+Unify positioning and harden geolocation workflows
+
+### Added
+
+- Added a generic Sensor Node position callback for plugin operations so actions can use the node's configured GPS source without implementing their own GPS client.
+- Added continuous gpsd position caching at the Sensor Node so moving RF observations can use fresh fixes without increasing heartbeat or node-state publication traffic.
+- Added spatial Wi-Fi geolocation sampling with per-BSSID receiver-position clusters, median RSSI aggregation, and configurable measurement spacing for focused, Search Similar, and Geolocate All workflows.
+
+### Changed
+
+- Changed Light Discovery to prioritize one representative detection per BSSID by default, use a small bounded pending cache, snapshot receiver position at observation time, and avoid building a long backlog in dense Wi-Fi environments.
+- Changed Wi-Fi operations to honor the Sensor Node's configured GPS source, including static Saved coordinates and fresh gpsd fixes, instead of opening independent gpsd connections.
+- Changed Edge OUI Discovery to use bounded per-BSSID pending observations and rate-limited emission so large groups of matching devices do not create an immediate detection burst.
+- Changed Dense Wi-Fi Wardrive Logger to maintain run-wide BSSID summaries, record only spatially or RF-useful observations, and package a normal collection session into one Artifact on Stop with a large size-based rollover only as a safety limit.
+- Changed focused Wi-Fi geolocation to emit one representative measurement for a receiver location and wait for meaningful movement before contributing another geometry point.
+- Changed Geolocate All and Search Similar to apply the same per-BSSID freshness, spatial clustering, and measurement-spacing rules while preserving deterministic Target creation and existing known-Target mappings.
+- Changed GPS point, GPS line, LFM beacon, and generic USRP geolocation actions to use the Sensor Node's configured position source instead of maintaining independent gpsd connections.
+- Changed generic USRP Target geolocation to suppress redundant stationary observations, emit immediately after meaningful receiver movement, and periodically refresh measurements without flooding the hub.
+- Changed generic RF Target geolocation to use the centralized HIPRFISR geolocation workflow and core `fissure.utils.geo` implementation as the active path, with legacy B205-specific geolocation code removed from the live Base plugin.
+
+### Fixed
+
+- Fixed Wi-Fi observations using gpsd even when the Sensor Node was configured for another GPS source such as Saved.
+- Fixed non-Wi-Fi geolocation and GPS trigger actions bypassing the Sensor Node's selected GPS source.
+- Fixed cumulative airodump rows being eligible to pair stale Wi-Fi RSSI data with a newer receiver position during geolocation.
+- Fixed repeated Wi-Fi geolocation observations from nearly the same receiver location inflating sample counts without adding useful spatial geometry.
+- Fixed generic USRP geolocation continuously forwarding redundant observations while the receiver remained at the same location.
+- Fixed stale geolocation action registrations referencing legacy or nonexistent operation paths.
+
+## 2026-9-17
+
+Harden field operations and installer reliability
+
+### Added
+
+- Added a Tactical map zoom slider that follows the active map pack's available zoom levels, preserves map center, and stays synchronized with wheel and touchpad zoom.
+- Added bounded Light Discovery output controls, including a configurable maximum detection rate and small burst allowance, so dense Wi-Fi environments cannot overwhelm the Sensor Node, HIPRFISR, and Dashboard message path.
+
+### Changed
+
+- Changed Wi-Fi Light Discovery to ignore unchanged cumulative airodump rows, prefer newly observed BSSIDs and stronger signals, throttle status updates, and yield between detection deliveries so control traffic remains responsive under load.
+- Changed Dense Wi-Fi Wardrive Logger batching to treat airodump source sightings as run-wide ingestion state, disable unique-BSSID batch flushing by default, preserve observation timing across artifact boundaries, and reduce status update frequency.
+- Changed GPS handling to run blocking gpsd probes outside the asyncio loop, tolerate a single missed periodic probe before marking cached position stale, and require fresh GPS data before Wi-Fi geolocation observations are emitted.
+- Changed TAK auto-connect behavior to wait quietly for server reachability, retry indefinitely without repetitive warning spam while offline, and automatically reconnect when the TAK server becomes available again.
+- Changed HamClock installation across supported OS installers to use the maintained Open HamClock source and a bounded Git download instead of the retired Clear Sky Institute server.
+
+### Fixed
+
+- Fixed a Tactical map download progress-dialog race that could dereference a cleared progress dialog and crash the Dashboard near download completion.
+- Fixed Dense Wi-Fi Wardrive Logger repeatedly re-ingesting the cumulative airodump AP list after each artifact flush, which could generate near-identical artifact batches continuously once the unique-device threshold was exceeded.
+- Fixed Dense Logger source-sighting bookkeeping so observations suppressed by the normal per-BSSID interval cannot later be associated with a newer receiver GPS position.
+- Fixed Wi-Fi geolocation operations continuing to use an old cached GPS position after the live gpsd stream stopped updating.
+
+## 2026-9-16
+
+Refine replay safety and Tactical map controls
+
+### Added
+
+- Added Dashboard-aware CoT replay handling so recorded Targets, detections, and geolocation observations can be restored for demonstration without replaying historical action menus, live node status, or control state.
+- Added TAK menu actions for replaying CoT logs to TAK alone or to TAK plus the Dashboard using the existing FISSURE terminal launcher pattern.
+- Added a Plot All action to the Tactical detections context menu so every detection currently shown for the selected Sensor Node can be plotted using the existing detection map path.
+- Added Tactical Detection Labels and Target Labels display toggles so dense map views can hide text while keeping the underlying markers and interactions available.
+
+### Changed
+
+- Changed replayed Dashboard Targets to remain presentation-only until replaced by live Target updates, keeping replayed geolocation observations separated from active Target state and preventing replay data from interfering with live geolocation controls.
+- Changed Tactical detection map labels to prefer SSID when available and fall back to frequency for non-Wi-Fi or unnamed detections.
+- Changed Tactical label visibility handling so detection and Target text can be toggled independently while Sensor Node labels, Target CE rings, and marker click behavior remain unaffected.
+
+### Fixed
+
+- Fixed generic plugin operation status transitions being suppressed by the Sensor Node status cache, restoring immediate Running and Idle updates for short and long-running plugin actions such as `dummy_detection`.
+- Fixed Dashboard replay behavior that could visually overwrite current Sensor Node status and action-control state with historical recorded values even though replayed actions were not actually executing.
+
+## 2026-9-16
+
+Stabilize Wi-Fi geolocation workflows and artifact logging
+
+### Added
+
+- Added shared Wi-Fi geolocation session tracking so Direct Geolocate All and Search Similar Targets use a common operation ID across related Targets and can be stopped as a single operation from any participating Target.
+- Added explicit Search Similar Target scoping from the Dashboard so bulk Wi-Fi geolocation only includes the intended visible known Targets instead of every Wi-Fi Target retained by HIPRFISR.
+- Added generic nested operation ID support to the Sensor Node plugin operation runner so plugins can preserve caller-supplied operation IDs without implementing custom action dispatch helpers.
+
+### Changed
+
+- Changed Wi-Fi geolocation Target lifecycle handling so Direct Geolocate All marks admitted Targets as actively tracking while running, restores them together when the shared operation stops, and keeps Search Similar lifecycle ownership centralized in HIPRFISR.
+- Changed Sensor Node status publishing to throttle forced heartbeat updates, preventing rapidly changing operation status text from flooding HIPRFISR and the Dashboard while preserving immediate terminal-state updates.
+- Changed Wi-Fi plugin actions back to the standard FISSURE plugin pattern of tags, hardware, schemas, and action entry points, removing Wi-Fi-specific parameter and operation-dispatch helper layers from `actions.py`.
+- Changed Wi-Fi operation shutdown to reuse the existing airodump-specific process cleanup path, allowing privileged `airodump-ng` processes to stop quickly without broad process-management behavior.
+- Changed Dense Wi-Fi Wardrive Logger batch output to write summary CSVs, observation CSVs, and metadata directly into Artifact operation folders instead of maintaining duplicate files under lowercase `FISSURE/logs`.
+- Changed Dense Wi-Fi Wardrive Logger persistence to be Artifact-based by default and removed the obsolete optional artifact-output path and legacy log-directory plumbing.
+
+### Fixed
+
+- Fixed Direct Geolocate All stopping only the selected Target instead of clearing every Target associated with the same shared Wi-Fi geolocation operation.
+- Fixed Search Similar Targets immediately expanding to stale or hidden Wi-Fi Targets that were present in HIPRFISR but not part of the operator's intended current Target set.
+- Fixed Wi-Fi geolocation control-plane flooding caused by operation status callbacks forcing Sensor Node heartbeats several times per second.
+- Fixed shared Wi-Fi geolocation stop handling so the operation action and operation ID are authoritative even if a Target's mode field is stale or inconsistent.
+- Fixed privileged `airodump-ng` teardown so Wi-Fi discovery and geolocation operations stop cleanly and responsively without leaving the operation runner waiting on failed process-group termination.
+
+## 2026-9-14
+
+Add target geolocation workflow and RF power ranging support
+
+### Added
+
+- Added a Target-centric Geolocation subtab with Start/Stop controls, operation state, collection method, frequency, geometry quality, solution status, range-calibration state, and a live observation table.
+- Added per-Target geolocation observation tracking in the Dashboard using native detection messages, including node, received power, gain, receiver position, timestamp, and collection status.
+- Added shared geolocation geometry validation with distinct-position clustering, minimum spatial spread, geometry-shape checks, and support for both distributed multi-node and mobile single-node collection.
+- Added an independent in-band RF power measurement path to the LFM RTL-SDR receiver that reports peak dBFS separately from the matched-filter detection metric, plus periodic POWER diagnostics for calibration and testing.
+- Added Target CoT geolocation metadata so Dashboard Targets can distinguish HIPRFISR multilateration solutions from imported or seed locations and display solver state without treating an existing Target coordinate as a new solution.
+- Added updated GNU Radio 3.8 and 3.10 LFM RTL-SDR flow graph sources that preserve the matched-filter detection path while generating the new dBFS power-measurement workflow.
+
+### Changed
+
+- Changed operational RSSI geolocation to live with Targets rather than Signal Analysis and temporarily hid the unfinished Direction Finding subtab until signal-centric bearing/AoA/TDOA workflows are ready.
+- Changed HIPRFISR geolocation readiness to require at least three spatially distinct receiver positions with sufficient spread and non-collinear geometry before attempting a solve.
+- Changed LFM geolocation to use received-power dBFS as the ranging measurement instead of the matched-filter peak, while treating dBFS observations as uncalibrated until an explicit path-loss reference is available.
+- Changed the Target Geolocation UI to follow the active workflow blocker in order, showing collection progress before calibration requirements and exposing a solution only when it originates from HIPRFISR multilateration.
+- Changed Geolocation observations to display Sensor Node callsigns instead of UUIDs, use compact content-sized columns with a stretched Status column, and match the standard Dashboard frame styling across themes.
+- Changed map-pack downloads to run outside the UI event loop with resume behavior for existing tiles and expanded selectable OpenStreetMap zoom levels through 19.
+
+### Fixed
+
+- Fixed map-pack download path handling that attempted directory creation on a string path.
+- Fixed Tactical map-pack switching so the current Sensor Node roster is replotted and off-map nodes remain represented at the map edge instead of appearing to disappear.
+- Fixed LFM RTL-SDR receiver defaults so the active detector uses the intended 15 threshold and 20 minimum peak values, and corrected the gain-default setter's invalid power-report interval reference.
+
+## 2026-9-13
+
+Add tactical audio/video streaming with TAK discovery
+
+### Added
+
+- Added Base plugin audio and video streaming actions for Sensor Nodes, including RTSP H.264 video with AAC audio and a separate low-bandwidth Opus/RTP audio stream.
+- Added automatic TAK video advertisement using `b-i-v` CoT messages so WinTAK can discover and open Sensor Node RTSP streams without manual connection setup.
+- Added Tactical node video and audio controls that start the selected Sensor Node stream and open matching Dashboard receivers.
+- Added Video Stream Receiver and Audio Stream Receiver tools for opening GStreamer-based media receivers directly from the Dashboard.
+- Added GStreamer and RTSP server runtime dependencies to the Ubuntu installer requirements for the new media workflows.
+
+### Changed
+
+- Changed the Tactical node panel to expose compact video and audio controls with dedicated enabled/disabled icon states and tooltips.
+
+## 2026-9-11
+
+Rebuild Classifier around plugin models and evidence workflows
+
+### Added
+
+- Added a new Classify workflow that combines HIPRFISR library matching with plugin-provided machine-learning classifiers and supports both combined evidence and per-input classification modes.
+- Added plugin-driven Decision Tree classification with compatible-model discovery, per-model voting, per-input consensus, batch consensus, and model selection through the existing Customize action workflow.
+- Added Classification Analysis Artifacts with operation metadata, model results, provenance, and automatic retrieval for Dashboard review and downstream SOI workflows.
+- Added SOI promotion from classification results, including Save to SOI / Create SOI for combined results and multi-row Create SOIs for per-input classifications while preserving linked Feature Analysis and Classification Analysis Artifacts.
+
+### Changed
+
+- Changed Classifier inputs to favor Feature Analysis Artifacts as the normal handoff from Features, while still supporting local feature files and optional SOI context.
+- Changed classification results to present library and model evidence together with explicit support/evidence fields, qualitative corroborated/conflicting/single-source assessments, and a selectable primary classification.
+- Changed model configuration so compatible models are exposed as normal plugin action parameters in Customize instead of separate strategy or model-management controls.
+- Changed Feature Extractor and Classifier defaults to use Artifact-first workflows, making managed Artifacts the normal path between feature extraction, classification, and SOI promotion.
+- Changed the Classifier interface to the numbered Signal Analysis workflow-card style and hid the legacy Training, Classification, and unfinished Model Lab tabs until they can be replaced after the conference.
+
+### Fixed
+
+- Fixed SOI Record details to render the current normalized SOI content correctly instead of relying on stale transport data.
+
+## 2026-9-9
+
+Align Feature Extractor with artifact-first Signal Analysis workflows
+
+### Added
+
+- Added SOI-aware Artifact feature extraction with linked Artifact filtering, direct managed IQ member selection, multi-file batch execution, and explicit Save to SOI / Create SOI actions after results are reviewed.
+- Added Feature Analysis Artifacts that preserve source Artifact and SOI provenance, register feature/report JSON files directly, and automatically retrieve small result Artifacts to the Dashboard for tables, plots, and exports.
+- Added explicit Artifact-source capability tags to Base Feature Extractor actions so plugin discovery can distinguish actions that support managed Artifact input.
+
+### Changed
+
+- Changed Feature Extractor inputs from separate Files, Folder, Artifact, and SOI source modes to Files, Folder, and Artifact with optional SOI context, matching the Conditioner workflow.
+- Changed Feature Extractor outputs to Local Results or Artifact, separating feature extraction from SOI mutation and linking completed Feature Analysis Artifacts to SOIs only through the result promotion controls.
+- Changed managed Artifact execution so selected members are resolved on the Sensor Node for both local and remote runs without requiring the source Artifact to be downloaded to the Dashboard.
+- Changed Feature Extractor output packaging to use normal multi-file Artifacts instead of ZIP bundles, preserving Artifact-to-Artifact provenance for downstream classification.
+- Changed the Feature Extractor interface to the numbered Signal Analysis workflow-card style with clearer input, extraction, run, result, and node-specific state handling.
+
+### Fixed
+
+- Fixed stale Feature Extractor state when switching Sensor Nodes or input source types so SOIs, Artifacts, members, queried actions, run state, and results no longer carry across incompatible contexts.
+- Fixed existing SOI Artifact links being overwritten with Feature Extractor source roles when saving feature results, preserving Conditioner/Capture evidence roles and appending only the new Feature Analysis relationship.
+
+## 2026-9-8
+
+Expand Conditioner with artifact-first tactical workflows
+
+### Added
+
+- Added SOI-aware Artifact conditioning with linked Artifact filtering, direct managed IQ member selection, multi-file batch execution, and conditioned Artifact outputs that can be saved back to the originating SOI.
+- Added remote Artifact conditioning support that resolves managed files on the Sensor Node, returns conditioned Artifacts through the normal Artifact path, and supports downloading and locally previewing remote results.
+- Added Base Power Squelch conditioning alongside Normal Decay for file-based IQ workflows while retaining live Frequency conditioning for selective RF capture.
+
+### Changed
+
+- Changed Conditioner action discovery to use plugin-provided category, method, hardware, and action tags instead of hardcoded method catalogs, with dynamic Customize parameters owned by the selected plugin action.
+- Changed Conditioner inputs to support File, Folder, Artifact, and Frequencies with optional SOI context, while treating Artifacts as grouped evidence and avoiding ZIP bundles as the normal Signal Analysis interchange format.
+- Changed Conditioner outputs and promotion flow so Artifact results preserve source Artifact and SOI provenance, and Save to SOI appends evidence links and analysis history instead of creating duplicate SOIs.
+- Changed the Conditioner interface to the numbered Signal Analysis workflow-card style with clearer action hierarchy, workflow status, result handling, and clean fresh-session state.
+
+## 2026-9-7
+
+Build evidence-driven Signal Analysis Inspection workflows
+
+### Added
+
+- Added the new Signal Analysis → Inspection workspace for one-file evidence analysis with Artifact or Local File sources, optional SOI context, metadata display, large-file overview selection, and native Time/I-Q, Spectrum, Spectrogram, Magnitude, IF, Phase, and Constellation views.
+- Added interactive Inspection measurements with time/frequency cursors, selection-derived values, editable Findings, plugin-result-to-Finding promotion, and explicit Save to SOI snapshots for preserving analysis results.
+- Added the `sa.inspection` plugin action path with hardware-aware action discovery, dynamic parameter customization, operation-specific Start/Stop control, result viewing, and a Base `iq_basic_analysis` action for structured IQ characterization.
+- Added the dedicated `inspection_callback` / `inspectionReturn` semantic result path across plugin Operations, Sensor Nodes, HIPRFISR, and the Dashboard so Inspection actions can return arbitrary structured analysis results without using detection, SOI, target, or artifact channels.
+- Added context-aware External Tools launching for Inspectrum, Gqrx, IQEngine, and Universal Radio Hacker while keeping those tools available independently of selected evidence.
+
+### Changed
+
+- Changed Inspection evidence handling to support local and remote artifacts, explicit remote Download/Prepare lifecycle, ZIP extraction before analysis, SigMF metadata interpretation, raw IQ fallback handling, and safe bounded reads for large or imperfect files.
+- Changed Signal Analysis handoff behavior so Capture and SOI context can prefill Inspection without forcing evidence/SOI linkage, while Findings remain local until explicitly saved to an SOI.
+- Changed Inspection plotting and controls to use scalable decimated previews, range-focused detailed analysis, a compact Matplotlib navigation toolbar, view-aware measurement modes, and cleaner first-boot/empty-state behavior.
+- Changed Inspection Analysis Actions to require a local Sensor Node for Dashboard-local evidence while preserving normal Sensor Node → HIPRFISR → Dashboard communications for structured operation results.
+
+## 2026-9-5
+
+Build plugin-driven Signal Analysis Capture workflows
+
+### Added
+
+- Added the new Signal Analysis → Capture workspace with optional SOI context, hardware-aware plugin action discovery, dynamic parameter customization, Start/Stop execution, capture estimates, and managed Last Capture results.
+- Added the `sa.capture` plugin action path so Capture can expose plugin-provided acquisition capabilities beyond the built-in IQ recorder without hardcoding capture methods into the Dashboard.
+- Added post-capture artifact actions for Download/Open Folder, Inspection handoff, and explicit SOI linking so users can review a capture before deciding whether to associate it with an SOI.
+
+### Changed
+
+- Changed the Base IQ Record workflow to use human-readable duration per capture while preserving sample-count handling internally for the existing recorder flowgraphs.
+- Changed Capture execution to use operation-specific lifecycle control and the existing artifact pipeline for both local and remote IP Sensor Nodes.
+- Changed SOI-to-Capture workflow handling so a selected SOI can prefill compatible capture parameters without automatically linking the resulting artifact.
+- Changed IQ Record metadata and result handling to expose capture duration, file count, size, frequency, sample rate, and acquisition timing in the Capture workspace.
+
+## 2026-9-4
+
+Add remote graphical Detector workflows
+
+### Added
+
+- Added remote graphical Fixed Detection support for IP Sensor Nodes using the existing Xpra presentation path while keeping detector execution, lifecycle, detections, status, and results on the normal FISSURE Sensor Node/HIPRFISR messaging path.
+
+### Changed
+
+- Changed Detector Stop behavior to target the active plugin operation by operation ID instead of stopping all plugin operations on the selected Sensor Node.
+- Changed Fixed Detection to default to GUI mode while retaining headless execution as an explicit option.
+- Changed Fixed Detection graphical launches to honor FISSURE execution context and subprocess display environments so the same operation works locally or through remote Xpra presentation.
+- Changed the Detector interface to hide the stale Search control until the Library Search workflow is restored.
+
+### Fixed
+
+- Fixed Fixed Detection hardware selection so the selected B2x0 serial is passed through to the GNU Radio flowgraph instead of being dropped before launch.
+
+## 2026-9-4
+
+Add remote graphical Survey workflows
+
+### Added
+
+- Added the new Signal Analysis → Survey workspace for exploratory live RF analysis with hardware-aware plugin action discovery, dynamic parameter customization, Start/Stop execution, Add SOI, execution status/results, and curated Third-Party Tools.
+- Added remote graphical Survey support for IP Sensor Nodes using Xpra as a separate presentation channel while keeping plugin execution, lifecycle, status, detections, and results on the normal FISSURE Sensor Node/HIPRFISR path.
+- Added Xpra execution context support for graphical plugin operations, including remote display selection, X11 environment isolation, and Sensor Node display-readiness waiting before GUI launch.
+- Added remote Third-Party Tool launching through Xpra for Universal Radio Hacker, Gqrx, QSpectrumAnalyzer, and Spektrum, including remote PATH handling and per-tool command definitions.
+- Added Passwordless SSH setup under Sensor Node Remote Actions with existing-key detection, optional Ed25519 key creation, secure public-key installation, verification, and password-based fallback when key authentication is not configured.
+- Added Xpra host installation support, including source-built version selection, host-only Apptainer handling, OpenSSH dependencies, verification, and cleanup of installer staging files.
+
+### Changed
+
+- Changed the live IQ inspection action to support both local and remote Sensor Nodes through the same plugin action instead of introducing a separate remote action path.
+- Changed remote Survey authentication to prefer noninteractive SSH key access and otherwise use the Dashboard password dialog with system OpenSSH, avoiding terminal-based password entry.
+- Changed Survey Third-Party Tools into clearer grouped button/description blocks and expanded compatible hardware exposure where supported, including USRP B20xmini/B2x0 for Gqrx and QSpectrumAnalyzer.
+- Changed the Ubuntu 24.04 QSpectrumAnalyzer installer and launch paths to explicitly use PyQt5 compatibility without altering the system-wide Qt binding preference.
+- Changed Apptainer host setup so Xpra remains a host dependency for remote graphical presentation rather than being installed inside the container.
+
+### Fixed
+
+- Fixed QSpectrumAnalyzer startup on Ubuntu 24.04 by forcing the PyQt5 binding required by its Qt5-era interface.
+
+## 2026-9-2
+
+Redesign Signal Analysis around centralized SOI workflows
+
+### Added
+
+- Added a new Signal Analysis → SOIs workspace with a global searchable/filterable SOI list, selected-SOI summary, manual Add/Edit/Delete/Refresh controls, and direct promotion from an SOI to a Target.
+- Added SOI detail views for the complete normalized Record, linked Evidence, contributing Detections, Analysis, and History, including artifact download/open links and analyst/model/database classification and protocol context.
+- Added direct SOI workflow shortcuts into Capture, Inspection, Classification, Protocol Discovery, and Direction Finding so downstream analysis can start from the selected SOI.
+- Added richer canonical SOI metadata including stable SOI IDs, timestamps, location, stage, notes, classification/protocol results, artifact relationships, and analysis history for use across Tactical and Signal Analysis.
+
+### Changed
+
+- Reorganized Signal Analysis into SOIs, Survey, Detector, Capture, Inspection, Conditioner, Features, Classifier, Protocol Discovery, Direction Finding, and temporary IQ Data tabs, removing the obsolete SOI Aggregator and establishing the new analysis workflow order.
+- Consolidated SOI delivery onto the Tactical path so HIPRFISR no longer sends a separate duplicate Dashboard SOI update path, while preserving the complete normalized SOI record for both Tactical and Signal Analysis views.
+- Refined the Selected SOI summary to emphasize frequency, bandwidth, modulation, classification, protocol, stage, timestamps, location, and notes while moving lower-level provenance and full-record details into the dedicated analysis views.
+- Updated the SOIs workspace styling across the current Dashboard themes with compact tables, workflow/action hierarchy, snapshot placeholder treatment, theme-aware evidence links, and a native scrollable plain-text Record viewer.
+
+## 2026-9-1
+
+Clean up Library tabs and Packet Crafter organization
+
+### Changed
+
+- Simplified the Library workspace to Browse, Gallery, Packet Crafter, and Archive by removing the obsolete Add and Plugin Manager tabs and hiding Search until the library, SOI, and protocol lookup model is redesigned.
+- Refined Browse and retained Gallery as the curated visual reference workspace for protocol-related photos, diagrams, signal captures, and learning material.
+- Reorganized Packet Crafter as a Library-owned feature by moving its initialization out of the legacy Targets & Actions path, renaming `AttackTabSlots.py` to `PacketCrafterTabSlots.py`, and updating slot connections/imports without changing packet-building behavior.
+- Kept Packet Crafter backed by the central library/database packet definitions while preserving existing field editing, CRC/check-field calculation, assembly, formatting, sequencing, import/export, and Scapy workflows.
+- Clarified Archive terminology by renaming Downloaded to Local Archive, Download to Online Archive, and Datasets to Dataset Builder while keeping replay and dataset-generation workflows in place.
+- Removed stale Packet Crafter references from legacy Dashboard callback imports and cleaned up related Library initialization/organization after the tab restructuring.
+
+## 2026-8-30
+
+Replace legacy listeners with HIPRFISR Listening Posts
+
+### Added
+
+- Added the Targets & Actions → Listening Posts workspace with persisted post definitions, runtime status, Auto Start, selected-post details, Recent Activity, explicit Add/Edit/Remove/Refresh/Start/Stop controls, and direct access to Listening Post test scripts.
+- Added HIPRFISR-owned Listening Post management backed by `YAML/listening_posts.yaml`, including create/update/start/stop/delete/query operations, bounded runtime activity, startup Auto Start handling, and clean shutdown of active posts.
+- Added Listening Post implementations for TCP/UDP, MQTT, ZMQ SUB, Website Poller, Serial Port, Filesystem, and Meshtastic behind a common receive/lifecycle interface.
+- Added structured Listening Post alerts with exact `target_id` association so valid returned messages can append Listening Post entries to existing Target history while unmatched or unknown target IDs remain unassociated.
+- Added updated Listening Post test utilities and setup instructions under `Tools/Listening_Post_Test_Scripts` covering all supported transport types and target-associated callback examples.
+
+### Changed
+
+- Moved the listener concept out of Sensor Nodes and renamed it Listening Posts to reflect HIPRFISR-hosted return/status channels that can support multiple targets without being tied to a specific Sensor Node.
+- Replaced the legacy Dashboard-table-owned listener lifecycle with authoritative HIPRFISR state, persisted definitions, explicit lifecycle commands, live status/activity updates, and restart-safe Auto Start behavior.
+- Reworked returned listener messages to use the current structured alert path and Target history instead of the removed legacy Sensor Node alert mechanism, while limiting external association metadata to explicit `target_id`.
+- Removed the obsolete Sensor Nodes → Listeners tab, legacy listener callbacks/state, `alert_listeners` bookkeeping, and the old `fissure/Listeners` package after validating the new Listening Posts path end to end.
+- Updated Listening Posts behavior for bounded Recent Activity clearing, MQTT error-state handling, delayed Filesystem new-file reads, bounded Website Poller duplicate tracking, and Meshtastic configuration that no longer exposes an unused baud-rate value.
+- Updated the Listening Posts workspace across light, dark, and custom themes with current FISSURE card styling, palette-aware utility controls, destructive Remove styling, and dynamic green Start/red Stop treatment.
+
+## 2026-8-30
+
+Complete Sensor Node plugin management lifecycle
+
+### Added
+
+- Added the Sensor Nodes → Plugins workspace with selected-node plugin inventory, Hub/Node version comparison, setup/state reporting, plugin details, operation logging, lifecycle status, and explicit Refresh, Deploy/Update, Repair Setup, and Remove controls.
+- Added lightweight `plugin.yaml` manifests and a standard `setup.py` lifecycle contract for plugin metadata and external node setup, including `check`, `install`, and opt-in `cleanup` actions while preserving compatibility with legacy plugins that do not provide either file.
+- Added remote IP plugin deployment over the existing binary transfer channel, with HIPRFISR-side packaging, SHA-256 verification, staged transfer handling, atomic whole-directory replacement, stale-file removal, symlink/path protections, and automatic setup verification after deployment.
+- Added managed plugin removal with Base protection, active-operation guards, optional plugin-owned cleanup, confirmation in the Dashboard, and separate local/shared versus remote-node removal behavior.
+- Added `required_plugins` manifest metadata with deployment preflight checks against the Sensor Node's actual plugin inventory and reverse-dependency protection that prevents removal of a plugin still required by another deployed plugin.
+- Added example manifests and no-op setup hooks to the existing Base, WiFi, Dummy, Mission-01, and X10 plugins so the current plugin set also serves as a template for future plugin development.
+
+### Changed
+
+- Reworked plugin management around the physical `Plugins/` directories as the authoritative Hub and Sensor Node inventories, with independent local enumeration and Dashboard-side union views instead of the legacy installed-file/database bookkeeping model.
+- Defined local-node plugin behavior around the shared Hub plugin tree while reserving Deploy/Update for remote IP Sensor Nodes, allowing local Repair Setup and managed removal without duplicating plugin packages.
+- Replaced legacy plugin deployment semantics with full plugin-directory replacement and explicit setup ownership, keeping FISSURE plugin dependencies in `required_plugins` while leaving Python packages, system packages, OOT modules, helper binaries, and other external requirements to plugin-defined `setup.py`.
+- Removed the obsolete Sensor Nodes Operations interface and legacy Plugins controls, callbacks, transfer/install/uninstall paths, operation-discovery GUI plumbing, and command-channel ZIP/hex transfer behavior now superseded by Actions, Activity, and the managed plugin lifecycle.
+- Updated the Plugins workspace across light, dark, and custom themes with consistent management-button hierarchy, status coloring and legend behavior, details/log/status panels, no-node state presentation, and palette-aware query/utility controls.
+
+## 2026-8-29
+
+Modernize Sensor Node activity and target action recommendations
+
+### Added
+
+- Added the Sensor Nodes → Activity workspace as a read-only node snapshot with existing node-state summary information, current plugin operations, selected-operation parameters/resources, structured alerts, and a bounded recent INFO/WARNING/ERROR log view without introducing polling or additional heartbeat traffic.
+- Added on-demand Sensor Node Activity snapshots using the existing operation registry and event log, including clean user-parameter capture for display, declared resource inspection, selected-node log filtering, and manual refresh for current activity/history details.
+- Added first-class Target Recommended Actions with a new plugin operation callback, authoritative HIPRFISR Target storage, recommendation IDs/deduplication, reasons and parameter overrides, and Target history entries for recommendation creation/removal.
+- Added Recommended Actions and History views to the Targets workspace, including selected-recommendation details, parameter payload inspection, full history entry details, and normal Target refresh persistence through the existing Target CoT synchronization path.
+- Added Stage Action support so a Target recommendation can populate the normal Single Action workflow with its plugin, action, compatible hardware selection, real action schema, and discovered parameter overrides without executing automatically.
+- Added a Dummy recommendation action for exercising the complete recommendation → Target → Stage Action workflow.
+
+### Changed
+
+- Reorganized Sensor Node operational visibility around Activity, reusing existing node state, TAK/structured alerts, operation bookkeeping, and log data instead of maintaining separate legacy status/alert history mechanisms.
+- Reworked plugin alerts into structured FISSURE alerts that continue through the existing CoT transport, appear in Tactical and Sensor Node Activity, and remain distinct from generic pin/track/event output produced through `tak_cot_callback`.
+- Migrated legacy listener-produced alert text onto the structured event-style alert path so secondary-channel callbacks continue reaching the Dashboard without relying on the old Sensor Nodes Alerts mechanism.
+- Replaced the legacy Sensor Node exploit-recommendation workflow with Target-owned Recommended Actions tied directly to plugin/action names and optional discovered parameter values, preserving the old “one action recommends the next” workflow within the current action architecture.
+- Removed the obsolete Sensor Nodes Alerts, Exploits, and Reports tabs and their Dashboard/HIPRFISR return paths, counters, staging/export controls, and legacy `exploit` / `exploitReturn` / `snreport` message handling now superseded by structured alerts, Target recommendations, and purpose-built artifacts/integrations.
+- Updated the Targets workspace layout and light/dark/custom styling for the new Details, Recommended Actions, and History views, including compact details text, recommendation staging controls, selected-detail sections, table sizing, and expanded history inspection.
+
+## 2026-8-27
+
+Rebuild Scapy around selected-node packet crafting and transmission
+
+### Added
+
+- Added the rebuilt Scapy workflow under Targets & Actions with packet presets, editable layer stacks, per-layer field editors, searchable Add Layer support, live Hexdump/Python output, interface selection, send/sendp/Auto transmit modes, count/loop/interval controls, and operation status/progress.
+- Added a Scapy compatibility layer to normalize layer discovery, field handling, packet serialization, interface discovery, and version-specific API differences so FISSURE can support multiple installed Scapy versions without scattering compatibility checks through the Dashboard.
+- Added selected-Sensor-Node interface discovery for both local and remote nodes, with remote interface queries routed through the Dashboard/HIPRFISR/Sensor Node path instead of assuming Dashboard-local interfaces.
+- Added Scapy transmission as a Sensor Node operation with operation IDs, progress updates, packet counts, send rate, Start/Stop lifecycle handling, and the selected node responsible for the actual network interface and packet transmission.
+- Added Packet Crafter → Scapy handoff so Library-defined packets and other crafted byte sequences can be opened in the Scapy workspace, edited/transmitted through the same path, and decoded independently by tools such as Wireshark even when Scapy has no native packet class for the protocol.
+- Added a declarative `scapy_presets.py` catalog with curated Wi-Fi, Ethernet/IPv4, and IPv6 starting packets, runtime filtering for unsupported Scapy layers, and generic nested-layer support for presets such as DNS.
+- Added generic Scapy `FlagsField` editing using the flag names exposed by the installed Scapy runtime, including multi-select checkbox popups, readable selected-flag values, preservation of unknown bits, and monitor-aware popup placement.
+
+### Changed
+
+- Moved Scapy packet handling away from hardcoded per-preset compatibility logic so normal presets are simple layer/field definitions while `scapy_compat.py` and the generic preset builder own runtime compatibility.
+- Reworked the Scapy transmit UI around the selected Sensor Node, including node/interface gating, automatic local/remote interface refresh, compact persistent Operation IDs with full UUID tooltips, short status summaries with full-message tooltips, and state-aware Start/Stop presentation.
+- Consolidated Packet Crafter Scapy integration around a single Open in Scapy action instead of maintaining a second set of Scapy load/show/interface/transmit controls inside Packet Crafter.
+- Replaced the legacy Dashboard/HIPRFISR/Sensor Node `startScapy` / `stopScapy` path and Python 2 `temp.cap` sender with the current Sensor Node operation lifecycle and Base Scapy transmit operation.
+- Removed the obsolete Packet Crafter Scapy controls, legacy `scapy_send.py` helper, and temporary `temp.cap` staging workflow now superseded by the rebuilt Scapy workspace.
+
+## 2026-8-25
+
+Rebuild Fuzzing around protocol plugin actions
+
+### Added
+
+- Added the rebuilt Fuzzing workflow under Targets & Actions with Library-driven protocol and packet-type selection, per-field fuzz configuration, seed and interval controls, Restore Defaults / All Binary / All Hex helpers, plugin-action querying, dynamic action parameters, and Start/Stop execution status.
+- Added the first protocol-owned fuzzing capability for X10, including the `x10_ook_field_fuzzer` action, B210 execution operation, and maint-3.8 X10 OOK field-fuzzing flow graph packaged under the X10 plugin.
+
+### Changed
+
+- Moved fuzzing execution onto the current plugin/action operation lifecycle while preserving the existing structured field-fuzzing mechanism and shared `gr-fuzzer` behavior instead of replacing the underlying fuzzing model.
+- Removed the legacy Fuzzing/Attack execution path, including the old Dashboard, HIPRFISR, and Sensor Node flow-graph runners, physical-fuzzing controls, Attack variable handling, obsolete Fuzzing UI, and the legacy alert-sender path now superseded by plugin operation results.
+- Made fuzzing capabilities protocol-centric and explicitly tagged for the Fuzzing workspace so specialized fuzzing actions can be filtered by protocol and hardware without appearing in the generic Single Action or Sequential Actions workflows.
+- Moved fuzzing runtime setup to the Sensor Node operation path, with RF/execution parameters and the Library-derived fuzzing plan passed into the protocol flow graph while the hub remains responsible for orchestration.
+- Updated the light, dark, and custom themes for the rebuilt Fuzzing workflow, including the guided setup/parameter/field/execution cards, field controls, state-aware Start/Stop button, execution status, setup grouping, and a persistent readable Operation ID that remains visible after a run completes or stops.
+
+### Fixed
+
+- Fixed the shared `gr-fuzzer` lifecycle so its private fuzzing thread stops with the GNU Radio flow graph instead of continuing to generate packets after the operation has been stopped.
+
+## 2026-8-23
+
+Reorganize Dashboard around targets and plugin actions
+
+### Added
+
+- Added a Targets workspace with shared Target selection, searchable Target details, notes, SOI linkage, Tactical navigation, and persistent Target updates through the existing Target model.
+- Added a generic Single Action workflow for querying compatible plugin actions, filtering locally by hardware and plugin, customizing action parameters, starting/stopping individual operations, reporting results, associating runs with an optional Target, and optionally waiting for configured detector events before execution.
+- Added Sequential Actions for building ordered plugin-action sequences with per-action parameters, duration, repeat count, interval, and early-advance behavior; sequences support error/completion policies, optional detector gating, explicit stop control, progress tracking, action-state timeline cards, sequence/action logs, and Target history.
+
+### Changed
+
+- Reorganized the Dashboard around the top-level workflow order **Tactical → Signal Analysis → Targets & Actions → Sensor Nodes → Library → Log**; moved IQ Data and Protocol Discovery under Signal Analysis and kept the Archive browser/replay/dataset workflows together under Library.
+- Replaced the legacy Attack workspace model with **Targets & Actions**, using optional Target context across Targets, Single Action, Sequential Actions, and the remaining action-oriented tools while keeping executable plugin actions independent from Target-specific state.
+- Standardized Single Action and Sequential Actions on the generic plugin action catalog, schema, and operation lifecycle so arbitrary compatible plugin actions can be configured and reused instead of relying on attack-specific flow-graph runners.
+- Replaced legacy Single-Stage and Multi-Stage execution and trigger workflows with Single Action, Sequential Actions, and reusable detector selection; removed their Dashboard pages, callbacks, dialogs, Sensor Node orchestration, Multi-Stage execution engine, and obsolete trigger machinery.
+- Removed the obsolete legacy Autorun page and old attack-Autorun execution branches while retaining the current plugin-backed Sensor Node Autorun workflow introduced in the previous update.
+- Temporarily hid the legacy Fuzzing workflow and its outdated shared attack selectors until it can be rebuilt around the current plugin/action architecture; Packet Crafter remains available and unchanged.
+- Removed Attack History and obsolete Single-/Multi-Stage Autorun coupling, and updated tab navigation to avoid hard-coded top-level tab indexes where practical after the Dashboard reorganization.
+- Updated light, dark, and custom themes for the new Targets, Single Action, and Sequential Actions workflows, including guided workflow cards, dynamic parameter controls, status/result areas, detector panels, and state-aware sequence timeline cards.
+- Updated the README Capabilities section to describe the current workflow organization and plugin/action direction while temporarily hiding the outdated capability screenshots for a later imagery refresh.
+
+### Fixed
+
+- Fixed selected-node heartbeat updates repeatedly rebuilding hardware-dependent controls, which could clear Detector action selection and customized parameters; hardware/configuration gates now refresh on actual connection-state changes while normal operation status continues to update on every heartbeat.
+
 ## 2026-8-17
 
 Rebuild Sensor Node Autorun and unify plugin action selection

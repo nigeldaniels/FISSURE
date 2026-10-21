@@ -4,6 +4,7 @@ import fissure.utils
 import fissure.utils.hardware
 from fissure.utils import plugin
 from fissure.utils.artifacts import ArtifactManager
+from fissure.utils import scapy_compat
 import logging
 import os
 import shutil
@@ -211,6 +212,187 @@ async def refreshSensorNodeFiles(component: object, sensor_node_folder=""):
         await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
+async def refreshSensorNodeActivity(component: object, log_limit=100):
+    """Return one bounded read-only Activity snapshot to HIPRFISR."""
+    def safe_text(value, max_chars=2048):
+        try:
+            text = str(value)
+        except Exception:
+            text = repr(value)
+
+        if len(text) > max_chars:
+            text = text[:max_chars] + "…"
+
+        return text
+
+    operations = []
+    for operation_id, operation in list((getattr(component, "operations", {}) or {}).items()):
+        if not isinstance(operation, dict):
+            continue
+
+        parameters = []
+        raw_parameters = operation.get("user_parameters") or {}
+        if isinstance(raw_parameters, dict):
+            for name, value in raw_parameters.items():
+                parameters.append({
+                    "name": safe_text(name, 256),
+                    "value": safe_text(value, 2048),
+                })
+
+        resources = []
+        raw_resources = operation.get("resources") or {}
+        if isinstance(raw_resources, dict):
+            for resource_key, resource in raw_resources.items():
+                resource = resource if isinstance(resource, dict) else {}
+                resources.append({
+                    "type": safe_text(resource.get("type") or "", 256),
+                    "name": safe_text(
+                        resource.get("description")
+                        or resource.get("model")
+                        or resource_key,
+                        512,
+                    ),
+                    "identifier": safe_text(resource.get("serial") or "", 512),
+                })
+
+        owner = "Autorun" if str(operation.get("owner") or "").strip() else ""
+
+        operations.append({
+            "plugin": safe_text(operation.get("plugin") or "", 256),
+            "activity": safe_text(operation.get("operation") or "", 512),
+            "operation_id": safe_text(operation_id, 128),
+            "start_time": operation.get("start_time") or 0,
+            "owner": owner,
+            "parameters": parameters,
+            "resources": resources,
+        })
+
+    operations.sort(
+        key=lambda operation: float(operation.get("start_time") or 0),
+        reverse=True,
+    )
+
+    try:
+        log_limit = max(0, min(int(log_limit), 100))
+    except (TypeError, ValueError):
+        log_limit = 100
+
+    log_entries = []
+    log_path = os.path.join(fissure.utils.LOG_DIR, "event.log")
+    logger_token = f"fissure.sensor node {component.uuid[:8]}".lower()
+    max_scan_bytes = 2 * 1024 * 1024
+
+    if log_limit > 0 and os.path.isfile(log_path):
+        def process_log_line(raw_line):
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            lower_line = line.lower()
+
+            if logger_token not in lower_line:
+                return
+
+            level_match = re.search(
+                r"\[(INFO|WARNING|ERROR|CRITICAL)\]",
+                line,
+                re.IGNORECASE,
+            )
+            if level_match is None:
+                return
+
+            level = level_match.group(1).upper()
+            if level == "CRITICAL":
+                level = "ERROR"
+
+            # FISSURE event.log format:
+            # 08/28/2026 07:59:37 PM - fissure.sensor node d2674c57: [INFO] ...
+            timestamp_match = re.match(
+                r"^\d{2}/\d{2}/\d{4}\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)\s+-\s+",
+                line,
+                re.IGNORECASE,
+            )
+
+            display_time = ""
+            if timestamp_match is not None:
+                raw_time = timestamp_match.group(1)
+                try:
+                    display_time = time.strftime(
+                        "%H:%M:%S",
+                        time.strptime(raw_time, "%I:%M:%S %p"),
+                    )
+                except ValueError:
+                    display_time = raw_time
+
+            logger_index = lower_line.find(logger_token)
+            message = line[logger_index + len(logger_token):]
+            message = re.sub(r"^[\s:\-\u2013\u2014]+", "", message).strip()
+
+            # The level already has its own table column. Remove one or more
+            # leading log-level tags from the message, while leaving tags that
+            # occur later in the actual payload untouched.
+            message = re.sub(
+                r"^(?:\[(?:INFO|WARNING|ERROR|CRITICAL)\]\s*)+",
+                "",
+                message,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            log_entries.append({
+                "time": display_time,
+                "level": level,
+                "message": safe_text(message, 2048),
+            })
+
+        try:
+            with open(log_path, "rb") as log_file:
+                log_file.seek(0, os.SEEK_END)
+                position = log_file.tell()
+                remainder = b""
+                scanned = 0
+
+                while position > 0 and len(log_entries) < log_limit and scanned < max_scan_bytes:
+                    read_size = min(8192, position, max_scan_bytes - scanned)
+                    position -= read_size
+                    log_file.seek(position)
+                    block = log_file.read(read_size)
+                    scanned += read_size
+
+                    combined = block + remainder
+                    lines = combined.split(b"\n")
+                    remainder = lines[0]
+
+                    for raw_line in reversed(lines[1:]):
+                        process_log_line(raw_line)
+                        if len(log_entries) >= log_limit:
+                            break
+
+                if (
+                    position == 0
+                    and remainder
+                    and len(log_entries) < log_limit
+                    and scanned <= max_scan_bytes
+                ):
+                    process_log_line(remainder)
+
+        except Exception:
+            component.logger.debug(
+                "Could not read Sensor Node Activity log snapshot.",
+                exc_info=True,
+            )
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshSensorNodeActivityResults",
+        fissure.comms.MessageFields.PARAMETERS: {
+            "node_uid": component.uuid,
+            "operations": operations,
+            "log_entries": log_entries,
+        },
+    }
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
+
+
 async def autorunPlaylistQuery(component: object):
     """Return stored Autorun playlist filenames to HIPRFISR."""
     playlists = component.get_autorun_playlist_names()
@@ -292,113 +474,6 @@ async def autorunPlaylistStop(component: object):
     await component.stop_autorun_playlist()
 
 
-async def physicalFuzzingStart(
-    component: object,
-   
-    fuzzing_variables=[],
-    fuzzing_type=[],
-    fuzzing_min=[],
-    fuzzing_max=[],
-    fuzzing_update_period=0,
-    fuzzing_seed_step=0,
-):
-    """
-    Sets variables within a flow graph as specified by the Dashboard.
-    """
-    # Run Event and Do Not Block
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None, 
-        component.physicalFuzzingThreadStart, 
-        fuzzing_variables,
-        fuzzing_type,
-        fuzzing_min,
-        fuzzing_max,
-        fuzzing_update_period,
-        fuzzing_seed_step,
-    )
-
-
-async def physicalFuzzingStop(component: object):
-    """
-    Stop physical fuzzing on the currently running attack flow graph.
-    """
-    # Stop the Thread
-    component.physical_fuzzing_stop_event = True
-
-
-async def multiStageAttackStart(
-    component: object,
-    filenames=[],
-    variable_names=[],
-    variable_values=[],
-    durations=[],
-    repeat=False,
-    file_types=[],
-    autorun_index=0,
-    trigger_values=[]
-):
-    """
-    Starts a new thread for running two flow graphs.
-    A new thread is created to allow the Sensor Node to still perform normal
-    functionality while waiting for an attack to finish.
-    """
-    # Use the Function that is Called Frequently in SensorNode.py
-    if len(trigger_values) == 0:
-        # Run Event and Do Not Block
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, component.multiStageAttackStart, filenames, variable_names, variable_values, durations, repeat, file_types, autorun_index)
-    else:
-        # Make a new Trigger Thread
-        fissure_event_values = [filenames, variable_names, variable_values, durations, repeat, file_types, autorun_index]
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, component.triggerStart, trigger_values, "Multi-Stage Attack", fissure_event_values, autorun_index)
-    await asyncio.sleep(0.1)
-
-
-async def multiStageAttackStop(component: object, autorun_index=0):
-    """Stops a multi-stage attack already in progress"""
-    # Use the Function that is Called Frequently in SensorNode.py
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, component.multiStageAttackStop, autorun_index)
-
-
-async def attackFlowGraphStart(
-    component: object,
-    flow_graph_filepath="",
-    variable_names=[],
-    variable_values=[],
-    file_type="",
-    run_with_sudo=False,
-    autorun_index=0,
-    trigger_values=[]
-):
-    """
-    Runs the flow graph with the specified file path.
-    """
-    # Use the Function that is Called Frequently in SensorNode.py
-    if len(trigger_values) == 0:
-        # Run Event and Do Not Block
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, component.attackFlowGraphStart, flow_graph_filepath, variable_names, variable_values, file_type, run_with_sudo, autorun_index)
-    else:
-        # Run Event and Do Not Block
-        fissure_event_values = [flow_graph_filepath, variable_names, variable_values, file_type, run_with_sudo, autorun_index]
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, component.triggerStart, trigger_values, "Single-Stage Attack", fissure_event_values, autorun_index)
-    await asyncio.sleep(0.1)
-
-
-async def attackFlowGraphStop(component: object, parameter="", autorun_index=0):
-    """
-    Stop the currently running attack flow graph.
-    """
-    # Use the Function that is Called Frequently in SensorNode.py
-    component.attackFlowGraphStop(parameter, autorun_index)
-    # loop = asyncio.get_event_loop()
-    # loop.run_in_executor(None, component.attackFlowGraphStop, parameter, autorun_index)
-
-
 async def iqFlowGraphStart(
     component: object,
     flow_graph_filepath="",
@@ -470,43 +545,104 @@ async def snifferFlowGraphStop(component: object, parameter=""):
         await component.flowGraphFinished("Sniffer - Message/PDU")
 
 
-async def startScapy(component: object, interface="", interval=0, loop=False, operating_system=""):
-    """
-    Start a new Scapy operation.
-    """
-    # Start Transmitting
-    if len(interface) > 0:
-        scapy_send_directory = os.path.join(fissure.utils.TOOLS_DIR)
+async def refreshScapyInterfaces(component: object):
+    """Return the Sensor Node's Scapy-visible network interfaces to HIPRFISR."""
+    interfaces = scapy_compat.get_interfaces()
 
-        if fissure.utils.get_default_expect_terminal(operating_system) == "gnome-terminal":
-            subprocess.Popen(
-                "gnome-terminal -- sudo python2 scapy_send.py " + interface + " " + interval + " " + loop,
-                cwd=scapy_send_directory,
-                shell=True,
-            )
-        elif fissure.utils.get_default_expect_terminal(operating_system) == "qterminal":
-            subprocess.Popen(
-                "qterminal -e sudo python2 scapy_send.py " + interface + " " + interval + " " + loop,
-                cwd=scapy_send_directory,
-                shell=True,
-            )
-        elif fissure.utils.get_default_expect_terminal(operating_system) == "lxterminal":
-            subprocess.Popen(
-                "lxterminal -e sudo python2 scapy_send.py " + interface + " " + interval + " " + loop,
-                cwd=scapy_send_directory,
-                shell=True,
-            )
-            
-    else:
-        component.logger.error("Specify wireless interface for Scapy")
+    parameters = {
+        "node_uid": str(getattr(component, "uuid", "") or ""),
+        "interfaces": interfaces,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshScapyInterfacesResults",
+        fissure.comms.MessageFields.PARAMETERS: parameters,
+    }
+
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
 
 
-async def stopScapy(component: object):
-    """
-    Stop the currently running Scapy operation.
-    """
-    # Stop the Thread
-    os.system('sudo pkill -f "python2 scapy"')
+async def startScapyTransmission(
+    component: object,
+    operation_id="",
+    interface="",
+    method="",
+    interval=0.1,
+    count=1,
+    loop=False,
+    packet_hex="",
+    root_layer="Ether",
+):
+    """Start a Scapy transmission operation on this Sensor Node."""
+    operation_id = str(operation_id or "").strip()
+
+    async def progress_callback(
+            operation_id="",
+            state="",
+            message="",
+            packets_sent=0,
+            set_rate="",
+            started="",
+        ):
+            msg = {
+                fissure.comms.MessageFields.IDENTIFIER: component.identifier,
+                fissure.comms.MessageFields.MESSAGE_NAME: "scapyTransmissionStatus",
+                fissure.comms.MessageFields.PARAMETERS: {
+                    "node_uid": str(getattr(component, "uuid", "") or ""),
+                    "operation_id": str(operation_id or ""),
+                    "state": str(state or ""),
+                    "message": str(message or ""),
+                    "packets_sent": int(packets_sent or 0),
+                    "set_rate": str(set_rate or ""),
+                    "started": str(started or ""),
+                },
+            }
+
+            await component.hiprfisr_socket.send_msg(
+                fissure.comms.MessageTypes.COMMANDS,
+                msg,
+            )
+
+    if not operation_id:
+        await progress_callback(
+            operation_id="",
+            state="error",
+            message="Missing operation ID.",
+        )
+        return
+
+    parameters = {
+        "operation_id": operation_id,
+        "requester": "scapy_tab",
+        "packet_hex": str(packet_hex or ""),
+        "root_layer": str(root_layer or "Ether"),
+        "interface": str(interface or ""),
+        "method": str(method or ""),
+        "interval": float(interval),
+        "count": int(count),
+        "loop": bool(loop),
+        "description": "Scapy packet transmission",
+        "progress_callback": progress_callback,
+    }
+
+    launched_operation_id = await component.run_plugin_operation(
+        component,
+        "Base",
+        "scapy_transmit.py",
+        parameters,
+        str(getattr(component, "uuid", "") or ""),
+    )
+
+    if launched_operation_id is None:
+        await progress_callback(
+            operation_id=operation_id,
+            state="error",
+            message="Could not start the Scapy transmit operation.",
+        )
 
 
 async def setVariable(component: object, flow_graph="", variable="", value=""):
@@ -519,15 +655,11 @@ async def setVariable(component: object, flow_graph="", variable="", value=""):
     if isNumber:
         if flow_graph == "Protocol Discovery":
             getattr(component.pdflowtoexec, formatted_name)(float(value))
-        elif flow_graph == "Attack":
-            getattr(component.attackflowtoexec, formatted_name)(float(value))
         elif flow_graph == "Sniffer":
             getattr(component.snifferflowtoexec, formatted_name)(float(value))
     else:
         if flow_graph == "Protocol Discovery":
             getattr(component.pdflowtoexec, formatted_name)(value)
-        elif flow_graph == "Attack":
-            getattr(component.attackflowtoexec, formatted_name)(value)
         elif flow_graph == "Sniffer":
             getattr(component.snifferflowtoexec, formatted_name)(value)
 
@@ -855,231 +987,965 @@ async def guessHardware(component: object, table_row=[], table_row_text=[], gues
     await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
-async def checkPlugin(component: object, plugin_names: List[str]):
-    """Check Plugin Status
+async def _get_plugin_inventory_with_setup_checks(component: object):
+    """Build local plugin inventory and evaluate deployed setup hooks."""
+    inventory = plugin.get_local_plugin_inventory()
 
-    Check for the existence and installation status of the plugin on the sensor node.
+    for plugin_name, entry in inventory.items():
+        if not isinstance(entry, dict):
+            continue
 
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_names : List[str]
-        Plugin names with file extension or no extension if folder
-    """
-    plugin_dir_list = os.listdir(fissure.utils.PLUGIN_DIR)
-    status = {}
-    for plugin_name in plugin_names:
-        status[plugin_name] = {'deployed': plugin_name in plugin_dir_list, 'installed': plugin.installed(plugin_name)}
+        if not entry.get("setup_present"):
+            entry["setup_status"] = "Ready"
+            entry["setup_message"] = "No external setup required."
+            entry["setup_output"] = ""
+            entry["setup_returncode"] = 0
+            continue
 
-    # return status
+        check_result = await plugin.run_plugin_setup(
+            plugin_name,
+            "check",
+            timeout=20.0,
+        )
+
+        entry["setup_status"] = str(
+            check_result.get("status")
+            or "Setup Failed"
+        )
+        entry["setup_message"] = str(
+            check_result.get("message")
+            or ""
+        )
+        entry["setup_output"] = str(
+            check_result.get("output")
+            or ""
+        )
+        entry["setup_returncode"] = check_result.get("returncode")
+
+    return inventory
+
+
+def _plugin_has_active_operations(component: object, plugin_name: str):
+    """Return active operation IDs currently owned by one plugin."""
+    plugin_name = str(plugin_name or "").strip()
+    active_operations = []
+
+    for operation_id, operation in list(
+        (getattr(component, "operations", {}) or {}).items()
+    ):
+        if not isinstance(operation, dict):
+            continue
+
+        if str(operation.get("plugin") or "").strip() == plugin_name:
+            active_operations.append(str(operation_id))
+
+    return active_operations
+
+
+def _get_plugin_deployment_reservations(
+    component: object,
+):
+    """Return/create the node-local plugin deployment reservation map."""
+    reservations = getattr(
+        component,
+        "plugin_deployment_reservations",
+        None,
+    )
+
+    if not isinstance(
+        reservations,
+        dict,
+    ):
+        reservations = {}
+        component.plugin_deployment_reservations = (
+            reservations
+        )
+
+    return reservations
+
+
+def _clear_plugin_deployment_reservation(
+    component: object,
+    plugin_name: str,
+    transfer_id: str,
+):
+    """Clear one reservation only when its transfer ID still matches."""
+    reservations = (
+        _get_plugin_deployment_reservations(
+            component
+        )
+    )
+
+    if reservations.get(
+        plugin_name
+    ) == transfer_id:
+        reservations.pop(
+            plugin_name,
+            None,
+        )
+
+
+async def refreshPluginInventory(component: object):
+    """Return plugin directories/manifests/setup health on this Sensor Node."""
     PARAMETERS = {
-        "plugin_status": status
+        "node_uid": component.uuid,
+        "node_inventory": await _get_plugin_inventory_with_setup_checks(component),
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "checkSensorNodePluginResults",
+        fissure.comms.MessageFields.MESSAGE_NAME: "refreshPluginInventoryResults",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
-    await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
 
 
-def unpackPlugin(plugin_name: str, plugin_data: str):
-    """Unpack Plugin
+async def repairPluginSetup(component: object, plugin_name=""):
+    """Run one plugin's setup install hook and verify it on the Sensor Node."""
+    plugin_name = str(plugin_name or "").strip()
 
-    Parameters
-    ----------
-    plugin_name : str
-        Plugin file name
-    plugin_data : str
-        Plugin data as binary ascii
-    """
-    # save file to plugin directory
-    filename = os.path.join(fissure.utils.PLUGIN_DIR, plugin_name)
-    with open(filename, "wb") as file:
-        file.write(binascii.a2b_hex(plugin_data))
+    active_operations = _plugin_has_active_operations(
+        component,
+        plugin_name,
+    )
 
-    if plugin_name[-4:] == '.zip':
-        # unzip package and remove zip file
-        shutil.unpack_archive(filename, filename[:-4], 'zip')
-        os.system('rm "' + filename + '"')
-        filename = filename[:-4]
+    if active_operations:
+        success = False
+        status = "Blocked"
+        message = (
+            f"{plugin_name} has active operation"
+            f"{'s' if len(active_operations) != 1 else ''}: "
+            + ", ".join(active_operations)
+        )
+        output = ""
+    else:
+        install_result = await plugin.run_plugin_setup(
+            plugin_name,
+            "install",
+            timeout=900.0,
+        )
 
-    return filename
+        install_output = str(
+            install_result.get("output")
+            or ""
+        ).strip()
 
-
-async def transferPlugins(component: object, plugins: List[tuple]):
-    """Save Plugin Sent by HIPRFISR
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugins : List[tuple]
-        Plugin file data as (file name, binary ascii file data)
-    """
-    for (plugin_name, plugin_data) in plugins:
-        # unpack plugin data
-        plugin_name = unpackPlugin(plugin_name, plugin_data)
-
-
-async def __installPlugin(component: object, plugin_name: str):
-    """Install Plugin to Sensor Node
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_name : str
-        Plugin name
-    """
-    # run installation
-    plugin.install(plugin_name)
-
-    # activate plugin on hiprfisr for sensor node
-    PARAMETERS = {
-        "plugin_name": plugin_name
-    }
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "registerPlugin",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    }
-    await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def installPlugins(component: object, plugin_names: str):
-    """Install Plugin
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_name : str
-        Plugin name with file extension or no extension if folder
-    """
-    # identify plugins on system and those needing to transfer
-    transfer_request = []
-    to_install = []
-    for plugin_name in plugin_names:
-        if not plugin_name in os.listdir(fissure.utils.PLUGIN_DIR):
-            transfer_request += [plugin_name]
+        if not install_result.get("ok"):
+            success = False
+            status = "Setup Failed"
+            message = str(
+                install_result.get("message")
+                or "Setup install failed."
+            )
+            output = install_output
         else:
-            to_install += [plugin_name]
+            check_result = await plugin.run_plugin_setup(
+                plugin_name,
+                "check",
+                timeout=20.0,
+            )
 
-    refresh_frontend_widgets = True
-    if len(transfer_request) > 0:
-        # request transfer and installation of plugins
-        PARAMETERS = {
-            "plugin_names": transfer_request,
-            "install": True
-        }
-        msg = {
-            fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "transferPlugins",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-        }
-        await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+            check_output = str(
+                check_result.get("output")
+                or ""
+            ).strip()
 
-        # do not update dashboard
-        refresh_frontend_widgets = False
+            output_parts = []
+            if install_output:
+                output_parts.append(
+                    "INSTALL\n"
+                    + install_output
+                )
+            if check_output:
+                output_parts.append(
+                    "CHECK\n"
+                    + check_output
+                )
+            output = "\n\n".join(output_parts)
 
-    # install available plugins
-    for plugin_name in to_install:
-        # sensor node installation
-        await __installPlugin(component, plugin_name)
+            if check_result.get("status") == "Ready":
+                success = True
+                status = "Ready"
+                message = "Setup completed and verification passed."
+            else:
+                success = False
+                status = str(
+                    check_result.get("status")
+                    or "Setup Failed"
+                )
+                message = (
+                    "Setup install completed, but verification did not pass. "
+                    + str(check_result.get("message") or "")
+                ).strip()
 
-    # update database and dashboard
+    node_inventory = await _get_plugin_inventory_with_setup_checks(component)
+
     PARAMETERS = {
-        "refresh_frontend_widgets": refresh_frontend_widgets
+        "node_uid": component.uuid,
+        "plugin_name": plugin_name,
+        "success": success,
+        "status": status,
+        "message": message,
+        "output": output,
+        "node_inventory": node_inventory,
     }
     msg = {
         fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "installPluginsDatabase",
+        fissure.comms.MessageFields.MESSAGE_NAME: "repairPluginSetupResults",
         fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
     }
-    await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
 
 
-async def transferPluginsInstall(component: object, plugins: List[tuple]):
-    """Transfer and Install Plugins
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugins : List[tuple]
-        Plugin file data as (file name, binary ascii file data)
+async def preparePluginDeployment(
+    component: object,
+    plugin_name="",
+    transfer_id="",
+    required_plugins=None,
+):
     """
-    for (plugin_name, plugin_data) in plugins:
-        # unpack plugin data
-        plugin_name = unpackPlugin(plugin_name, plugin_data)
+    Approve/reject one remote plugin deployment before HIPRFISR sends bytes.
 
-        # run installation
-        await __installPlugin(component, plugin_name)
-
-    # update database and dashboard
-    msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "installPluginsDatabase",
-    }
-    await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-async def uninstallPlugins(component: object, plugin_names: str):
-    """Uninstall Plugins
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_names : str
-        Plugin names with file extension
+    Required FISSURE plugins must already be physically deployed on this node.
     """
-    for plugin_name in plugin_names:
-        # run uninstallation
-        plugin.uninstall(plugin_name)
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
 
-        # deregister plugin on hiprfisr for sensor node
-        PARAMETERS = {
-            "plugin_name": plugin_name
-        }
-        msg = {
-            fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-            fissure.comms.MessageFields.MESSAGE_NAME: "deregisterPlugin",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-        }
-        await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    transfer_id = str(
+        transfer_id
+        or ""
+    ).strip()
 
-    # update database and dashboard
+    required_plugins = [
+        str(required_plugin).strip()
+        for required_plugin in (
+            required_plugins
+            or []
+        )
+        if str(required_plugin).strip()
+    ]
+
+    success = False
+    message = ""
+
+    if component.local_remote != "remote":
+        message = (
+            "Plugin package deployment is only available "
+            "for remote Sensor Nodes."
+        )
+
+    elif component.network_type != "IP":
+        message = (
+            "Plugin package deployment requires "
+            "an IP Sensor Node."
+        )
+
+    else:
+        node_inventory = (
+            plugin.get_local_plugin_inventory()
+        )
+
+        missing_required_plugins = [
+            required_plugin
+            for required_plugin in required_plugins
+            if required_plugin not in node_inventory
+        ]
+
+        if missing_required_plugins:
+            message = (
+                f"{plugin_name} requires plugin"
+                f"{'s' if len(missing_required_plugins) != 1 else ''} "
+                "that are not deployed on this Sensor Node: "
+                + ", ".join(
+                    missing_required_plugins
+                )
+            )
+
+        else:
+            active_operations = (
+                _plugin_has_active_operations(
+                    component,
+                    plugin_name,
+                )
+            )
+
+            if active_operations:
+                message = (
+                    f"{plugin_name} has active operation"
+                    f"{'s' if len(active_operations) != 1 else ''}: "
+                    + ", ".join(
+                        active_operations
+                    )
+                )
+
+            else:
+                reservations = (
+                    _get_plugin_deployment_reservations(
+                        component
+                    )
+                )
+
+                existing_transfer = reservations.get(
+                    plugin_name
+                )
+
+                if (
+                    existing_transfer
+                    and existing_transfer != transfer_id
+                ):
+                    message = (
+                        f"{plugin_name} already has "
+                        "a deployment in progress."
+                    )
+
+                else:
+                    try:
+                        package_path = (
+                            plugin.get_plugin_package_staging_path(
+                                plugin_name,
+                                transfer_id,
+                                create_folder=True,
+                            )
+                        )
+
+                        if os.path.isfile(
+                            package_path
+                        ):
+                            os.remove(
+                                package_path
+                            )
+
+                        reservations[
+                            plugin_name
+                        ] = transfer_id
+
+                        success = True
+                        message = (
+                            "Sensor Node is ready to receive "
+                            f"{plugin_name}."
+                        )
+
+                    except Exception as exc:
+                        message = str(
+                            exc
+                        )
+
     PARAMETERS = {
-        "plugin_names": plugin_names
+        "node_uid": component.uuid,
+        "plugin_name": plugin_name,
+        "transfer_id": transfer_id,
+        "success": success,
+        "message": message,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "preparePluginDeploymentResults",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
+
+
+async def cancelPluginDeployment(
+    component: object,
+    plugin_name="",
+    transfer_id="",
+):
+    """Release one deployment reservation and delete its staged ZIP."""
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
+    transfer_id = str(
+        transfer_id
+        or ""
+    ).strip()
+
+    _clear_plugin_deployment_reservation(
+        component,
+        plugin_name,
+        transfer_id,
+    )
+
+    try:
+        package_path = (
+            plugin.get_plugin_package_staging_path(
+                plugin_name,
+                transfer_id,
+                create_folder=False,
+            )
+        )
+
+        if os.path.isfile(
+            package_path
+        ):
+            os.remove(
+                package_path
+            )
+
+    except Exception:
+        pass
+
+
+async def finalizePluginDeployment(
+    component: object,
+    plugin_name="",
+    transfer_id="",
+):
+    """
+    Replace one remote Sensor Node plugin and verify/setup its environment.
+    """
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
+    transfer_id = str(
+        transfer_id
+        or ""
+    ).strip()
+
+    success = False
+    status = "Failed"
+    message = ""
+    output_parts = []
+
+    reservations = (
+        _get_plugin_deployment_reservations(
+            component
+        )
+    )
+
+    try:
+        if component.local_remote != "remote":
+            raise RuntimeError(
+                "Plugin package deployment is only available "
+                "for remote Sensor Nodes."
+            )
+
+        if component.network_type != "IP":
+            raise RuntimeError(
+                "Plugin package deployment requires "
+                "an IP Sensor Node."
+            )
+
+        if reservations.get(
+            plugin_name
+        ) != transfer_id:
+            raise RuntimeError(
+                "Plugin deployment reservation is no longer valid."
+            )
+
+        active_operations = (
+            _plugin_has_active_operations(
+                component,
+                plugin_name,
+            )
+        )
+
+        if active_operations:
+            raise RuntimeError(
+                (
+                    f"{plugin_name} has active operation"
+                    f"{'s' if len(active_operations) != 1 else ''}: "
+                    + ", ".join(
+                        active_operations
+                    )
+                )
+            )
+
+        deployed = (
+            plugin.deploy_staged_plugin_package(
+                plugin_name,
+                transfer_id,
+            )
+        )
+
+        deployed_version = str(
+            deployed.get(
+                "version",
+                "",
+            )
+            or ""
+        ).strip()
+
+        setup_present = bool(
+            deployed.get(
+                "setup_present",
+                False,
+            )
+        )
+
+        if not setup_present:
+            success = True
+            status = "Ready"
+            message = (
+                f"{plugin_name}"
+                + (
+                    f" {deployed_version}"
+                    if deployed_version
+                    else ""
+                )
+                + " deployed successfully. "
+                "No external setup is required."
+            )
+
+        else:
+            initial_check = (
+                await plugin.run_plugin_setup(
+                    plugin_name,
+                    "check",
+                    timeout=20.0,
+                )
+            )
+
+            initial_output = str(
+                initial_check.get(
+                    "output",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if initial_output:
+                output_parts.append(
+                    "CHECK BEFORE SETUP\n"
+                    + initial_output
+                )
+
+            if (
+                initial_check.get(
+                    "status"
+                )
+                == "Ready"
+            ):
+                success = True
+                status = "Ready"
+                message = (
+                    f"{plugin_name}"
+                    + (
+                        f" {deployed_version}"
+                        if deployed_version
+                        else ""
+                    )
+                    + " deployed successfully. "
+                    "Existing setup is already ready."
+                )
+
+            else:
+                install_result = (
+                    await plugin.run_plugin_setup(
+                        plugin_name,
+                        "install",
+                        timeout=900.0,
+                    )
+                )
+
+                install_output = str(
+                    install_result.get(
+                        "output",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                if install_output:
+                    output_parts.append(
+                        "INSTALL\n"
+                        + install_output
+                    )
+
+                if not install_result.get(
+                    "ok"
+                ):
+                    success = False
+                    status = "Setup Failed"
+                    message = (
+                        f"{plugin_name}"
+                        + (
+                            f" {deployed_version}"
+                            if deployed_version
+                            else ""
+                        )
+                        + " files were deployed, but setup failed. "
+                        + str(
+                            install_result.get(
+                                "message",
+                                "",
+                            )
+                            or ""
+                        )
+                    ).strip()
+
+                else:
+                    final_check = (
+                        await plugin.run_plugin_setup(
+                            plugin_name,
+                            "check",
+                            timeout=20.0,
+                        )
+                    )
+
+                    final_output = str(
+                        final_check.get(
+                            "output",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    if final_output:
+                        output_parts.append(
+                            "CHECK AFTER SETUP\n"
+                            + final_output
+                        )
+
+                    if (
+                        final_check.get(
+                            "status"
+                        )
+                        == "Ready"
+                    ):
+                        success = True
+                        status = "Ready"
+                        message = (
+                            f"{plugin_name}"
+                            + (
+                                f" {deployed_version}"
+                                if deployed_version
+                                else ""
+                            )
+                            + " deployed and setup verified."
+                        )
+
+                    else:
+                        success = False
+                        status = str(
+                            final_check.get(
+                                "status",
+                                "Setup Failed",
+                            )
+                            or "Setup Failed"
+                        )
+                        message = (
+                            f"{plugin_name}"
+                            + (
+                                f" {deployed_version}"
+                                if deployed_version
+                                else ""
+                            )
+                            + " files were deployed, but setup verification failed. "
+                            + str(
+                                final_check.get(
+                                    "message",
+                                    "",
+                                )
+                                or ""
+                            )
+                        ).strip()
+
+    except Exception as exc:
+        success = False
+        status = "Failed"
+        message = str(
+            exc
+        )
+
+    finally:
+        _clear_plugin_deployment_reservation(
+            component,
+            plugin_name,
+            transfer_id,
+        )
+
+        try:
+            package_path = (
+                plugin.get_plugin_package_staging_path(
+                    plugin_name,
+                    transfer_id,
+                    create_folder=False,
+                )
+            )
+
+            if os.path.isfile(
+                package_path
+            ):
+                os.remove(
+                    package_path
+                )
+
+        except Exception:
+            pass
+
+    node_inventory = (
+        await _get_plugin_inventory_with_setup_checks(
+            component
+        )
+    )
+
+    PARAMETERS = {
+        "node_uid": component.uuid,
+        "plugin_name": plugin_name,
+        "transfer_id": transfer_id,
+        "success": success,
+        "status": status,
+        "message": message,
+        "output": "\n\n".join(
+            output_parts
+        ),
+        "node_inventory": node_inventory,
     }
     msg = {
-        fissure.comms.MessageFields.IDENTIFIER: component.identifier,
-        fissure.comms.MessageFields.MESSAGE_NAME: "uninstallPluginsDatabase",
-        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "finalizePluginDeploymentResults",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
     }
-    await component.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
 
 
-async def removePlugin(component: object, node_uid: str, plugin_name: str):
-    """Remove Plugin
-
-    **WARNING**: This will remove the plugin from the sensor node file system
-
-    Parameters
-    ----------
-    component : object
-        Component
-    node_uid : str
-        Sensor node UID
-    plugin_name : str
-        Plugin name with file extension
+async def removeManagedPlugin(
+    component: object,
+    plugin_name="",
+):
     """
-    # Remove plugin
-    plugin.remove(plugin_name)
+    Remove one plugin from this Sensor Node using the managed plugin lifecycle.
+    """
+    plugin_name = str(
+        plugin_name
+        or ""
+    ).strip()
 
+    success = False
+    status = "Failed"
+    message = ""
+    output = ""
+
+    try:
+        if not plugin_name:
+            raise RuntimeError(
+                "No plugin was selected."
+            )
+
+        if plugin_name.casefold() == "base":
+            raise RuntimeError(
+                "The Base plugin cannot be removed."
+            )
+
+        active_operations = (
+            _plugin_has_active_operations(
+                component,
+                plugin_name,
+            )
+        )
+
+        if active_operations:
+            status = "Blocked"
+
+            raise RuntimeError(
+                (
+                    f"{plugin_name} has active operation"
+                    f"{'s' if len(active_operations) != 1 else ''}: "
+                    + ", ".join(
+                        active_operations
+                    )
+                )
+            )
+
+        inventory = (
+            plugin.get_local_plugin_inventory()
+        )
+
+        plugin_entry = inventory.get(
+            plugin_name
+        )
+
+        if not isinstance(
+            plugin_entry,
+            dict,
+        ):
+            raise RuntimeError(
+                f"Plugin is not deployed: {plugin_name}"
+            )
+
+        dependent_plugins = []
+
+        for (
+            deployed_plugin_name,
+            deployed_plugin_entry,
+        ) in inventory.items():
+            if (
+                deployed_plugin_name == plugin_name
+                or not isinstance(
+                    deployed_plugin_entry,
+                    dict,
+                )
+            ):
+                continue
+
+            required_plugins = [
+                str(required_plugin).strip()
+                for required_plugin in (
+                    deployed_plugin_entry.get(
+                        "required_plugins",
+                        [],
+                    )
+                    or []
+                )
+                if str(required_plugin).strip()
+            ]
+
+            if plugin_name in required_plugins:
+                dependent_plugins.append(
+                    deployed_plugin_name
+                )
+
+        if dependent_plugins:
+            dependent_plugins.sort(
+                key=str.casefold
+            )
+
+            status = "Blocked"
+
+            raise RuntimeError(
+                (
+                    f"{plugin_name} is required by deployed plugin"
+                    f"{'s' if len(dependent_plugins) != 1 else ''}: "
+                    + ", ".join(
+                        dependent_plugins
+                    )
+                )
+            )
+
+        cleanup_supported = bool(
+            plugin_entry.get(
+                "cleanup_supported",
+                False,
+            )
+        )
+
+        setup_present = bool(
+            plugin_entry.get(
+                "setup_present",
+                False,
+            )
+        )
+
+        if cleanup_supported:
+            if not setup_present:
+                raise RuntimeError(
+                    (
+                        f"{plugin_name} declares cleanup support "
+                        "but does not provide setup.py."
+                    )
+                )
+
+            cleanup_result = (
+                await plugin.run_plugin_setup(
+                    plugin_name,
+                    "cleanup",
+                    timeout=300.0,
+                )
+            )
+
+            output = str(
+                cleanup_result.get(
+                    "output",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not cleanup_result.get(
+                "ok"
+            ):
+                status = "Cleanup Failed"
+
+                raise RuntimeError(
+                    (
+                        f"{plugin_name} cleanup failed. "
+                        + str(
+                            cleanup_result.get(
+                                "message",
+                                "",
+                            )
+                            or ""
+                        )
+                    ).strip()
+                )
+
+        plugin.remove_local_plugin_directory(
+            plugin_name
+        )
+
+        success = True
+        status = "Removed"
+
+        if cleanup_supported:
+            message = (
+                f"{plugin_name} cleanup completed and "
+                "the plugin was removed."
+            )
+        else:
+            message = (
+                f"{plugin_name} was removed. "
+                "No cleanup was declared."
+            )
+
+    except Exception as exc:
+        if not message:
+            message = str(
+                exc
+            )
+
+    node_inventory = (
+        await _get_plugin_inventory_with_setup_checks(
+            component
+        )
+    )
+
+    PARAMETERS = {
+        "node_uid": component.uuid,
+        "plugin_name": plugin_name,
+        "success": success,
+        "status": status,
+        "message": message,
+        "output": output,
+        "node_inventory": node_inventory,
+    }
+
+    msg = {
+        fissure.comms.MessageFields.IDENTIFIER:
+            component.identifier,
+        fissure.comms.MessageFields.MESSAGE_NAME:
+            "removeManagedPluginResults",
+        fissure.comms.MessageFields.PARAMETERS:
+            PARAMETERS,
+    }
+
+    await component.hiprfisr_socket.send_msg(
+        fissure.comms.MessageTypes.COMMANDS,
+        msg,
+    )
+    
 
 async def sendPluginNamesTak(
     component: object, 

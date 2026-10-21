@@ -17,6 +17,11 @@ import qasync
 
 import fissure.utils
 from .legacy import _safe_float, _safe_int
+from .survey import (
+    _sa_survey_remote_xpra_enabled,
+    _sa_survey_start_remote_xpra,
+    _schedule_sa_survey_xpra_cleanup,
+)
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -40,8 +45,8 @@ def _slotTSI_DetectorSearchClicked(dashboard: QtCore.QObject):
         dashboard.ui.checkBox_library_search_continuous.setChecked(False)
 
         # Change Tabs
-        dashboard.ui.tabWidget_library.setCurrentIndex(2)  # Search
-        dashboard.ui.tabWidget.setCurrentIndex(7)  # Library
+        dashboard.ui.tabWidget.setCurrentWidget(dashboard.ui.tab_library)
+        dashboard.ui.tabWidget_library.setCurrentWidget(dashboard.ui.tab_search)
 
 
 @qasync.asyncSlot(QtCore.QObject)
@@ -1604,12 +1609,15 @@ def initialize_tsi_detector_controls(dashboard: QtCore.QObject):
     dashboard.tsi_detector_node_uid = ""
     dashboard.tsi_detector_opid = ""
     dashboard.tsi_detector_waiting_for_opid = False
+    dashboard.tsi_detector_xpra_active = False
 
     dashboard.tsi_detector_blacklist_ranges = getattr(
         dashboard,
         "tsi_detector_blacklist_ranges",
         [],
     )
+
+    dashboard.ui.pushButton_tsi_detector_search.setVisible(False)
 
     clear_tsi_detector_methods(dashboard)
 
@@ -1693,96 +1701,56 @@ def initialize_tsi_detector_controls(dashboard: QtCore.QObject):
     update_tsi_detector_selected_node_gate(dashboard)
 
 
-def update_tsi_detector_hardware_combo(
-    dashboard: QtCore.QObject,
-):
-    """
-    Populate the TSI Detector execution hardware selector.
-
-    Unlike the reusable DetectorSelectionDialog, this execution tab does not
-    need an All Compatible browse entry. A run is either explicitly
-    hardware-independent or bound to one configured device.
-    """
+def update_tsi_detector_hardware_combo(dashboard: QtCore.QObject):
+    """Populate Detector hardware without disturbing an unchanged selection."""
     combo = dashboard.ui.comboBox_tsi_detector_hardware
     current_text = str(combo.currentText() or "").strip()
-    has_node = bool(
-        str(
-            getattr(
-                dashboard,
-                "selected_node_uid",
-                "",
-            )
-            or ""
-        ).strip()
-    )
+    has_node = bool(str(getattr(dashboard, "selected_node_uid", "") or "").strip())
 
     hardware_names = []
-
     if has_node:
         try:
-            hardware_names = (
-                fissure.utils.hardware.selectedNodeHardwareDisplayNames(
-                    dashboard,
-                    "tsi",
-                )
-            )
+            hardware_names = fissure.utils.hardware.selectedNodeHardwareDisplayNames(dashboard, "tsi")
         except Exception as e:
-            dashboard.logger.debug(
-                "[TSI Detector] Could not get selected-node hardware: "
-                f"{e}"
-            )
+            dashboard.logger.debug(f"[TSI Detector] Could not get selected-node hardware: {e}")
+
+    expected_items = ["No Hardware"] + hardware_names if has_node else []
+    existing_items = [str(combo.itemText(index)) for index in range(combo.count())]
+
+    if existing_items == expected_items:
+        combo.setEnabled(has_node and not getattr(dashboard, "tsi_detector_running", False))
+        return False
 
     combo.blockSignals(True)
-    combo.clear()
+    try:
+        combo.clear()
 
-    if has_node:
-        combo.addItem(
-            "No Hardware",
-            {
-                "mode": "none",
-                "hardware_type": "",
-                "display_name": "",
-            },
-        )
+        if has_node:
+            combo.addItem("No Hardware", {"mode": "none", "hardware_type": "", "display_name": ""})
 
-        for display_name in hardware_names:
-            hardware_type, *_ = (
-                fissure.utils.hardware.hardwareDisplayNameLookup(
-                    dashboard,
+            for display_name in hardware_names:
+                hardware_type, *_ = fissure.utils.hardware.hardwareDisplayNameLookup(dashboard, display_name, "tsi")
+                combo.addItem(
                     display_name,
-                    "tsi",
+                    {
+                        "mode": "hardware",
+                        "hardware_type": str(hardware_type or "").strip(),
+                        "display_name": display_name,
+                    },
                 )
-            )
 
-            combo.addItem(
-                display_name,
-                {
-                    "mode": "hardware",
-                    "hardware_type": str(
-                        hardware_type
-                        or ""
-                    ).strip(),
-                    "display_name": display_name,
-                },
-            )
+            restore_index = combo.findText(current_text, QtCore.Qt.MatchExactly)
+            if restore_index >= 0:
+                combo.setCurrentIndex(restore_index)
+            elif hardware_names:
+                combo.setCurrentIndex(1)
+            else:
+                combo.setCurrentIndex(0)
+    finally:
+        combo.blockSignals(False)
 
-        restore_index = combo.findText(
-            current_text,
-            QtCore.Qt.MatchExactly,
-        )
-
-        if restore_index >= 0:
-            combo.setCurrentIndex(restore_index)
-        elif hardware_names:
-            combo.setCurrentIndex(1)
-        else:
-            combo.setCurrentIndex(0)
-
-    combo.blockSignals(False)
-    combo.setEnabled(
-        has_node
-        and not getattr(dashboard, "tsi_detector_running", False)
-    )
+    combo.setEnabled(has_node and not getattr(dashboard, "tsi_detector_running", False))
+    return str(combo.currentText() or "").strip() != current_text
 
 
 def clear_tsi_detector_methods(
@@ -2302,77 +2270,30 @@ def _tsi_detector_schema_description(parameters: list) -> str:
     return ""
 
 
-def update_tsi_detector_selected_node_gate(
-    dashboard: QtCore.QObject,
-):
+def update_tsi_detector_selected_node_gate(dashboard: QtCore.QObject):
     """
-    Gate the TSI Detector workbench by selected-node availability.
-
-    Action catalogs belong to one Sensor Node. Switching or reconnecting nodes
-    discards the old catalog and requires one new Query Actions request.
+    Gate the TSI Detector workbench by selected-node availability without
+    disturbing a stable hardware/action/parameter selection.
     """
-    selected_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
+    selected_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
     has_selected_node = bool(selected_uid)
 
     if has_selected_node:
-        node_state = (
-            getattr(
-                dashboard,
-                "node_states",
-                {},
-            )
-            or {}
-        ).get(selected_uid)
-
-        if (
-            isinstance(node_state, dict)
-            and node_state.get("connected") is False
-        ):
+        node_state = (getattr(dashboard, "node_states", {}) or {}).get(selected_uid)
+        if isinstance(node_state, dict) and node_state.get("connected") is False:
             has_selected_node = False
 
-    stack = getattr(
-        dashboard.ui,
-        "stackedWidget_tsi_detector",
-        None,
-    )
-
+    stack = getattr(dashboard.ui, "stackedWidget_tsi_detector", None)
     if stack is not None:
-        stack.setCurrentIndex(
-            0
-            if has_selected_node
-            else 1
-        )
+        stack.setCurrentIndex(0 if has_selected_node else 1)
 
-    if getattr(
-        dashboard,
-        "tsi_detector_running",
-        False,
-    ):
-        _tsi_detector_set_controls_enabled(
-            dashboard,
-            False,
-        )
-        _tsi_detector_set_card3_enabled(
-            dashboard,
-            True,
-        )
-        update_tsi_detector_status_from_node(
-            dashboard,
-            node_uid=selected_uid,
-        )
+    if getattr(dashboard, "tsi_detector_running", False):
+        _tsi_detector_set_controls_enabled(dashboard, False)
+        _tsi_detector_set_card3_enabled(dashboard, True)
+        update_tsi_detector_status_from_node(dashboard, node_uid=selected_uid)
         return
 
-    _tsi_detector_set_start_stop_button(
-        dashboard,
-        False,
-    )
+    _tsi_detector_set_start_stop_button(dashboard, False)
 
     hardware_combo = dashboard.ui.comboBox_tsi_detector_hardware
     plugin_combo = dashboard.ui.comboBox_tsi_detector_plugin
@@ -2387,10 +2308,7 @@ def update_tsi_detector_selected_node_gate(
         dashboard.tsi_detector_action_query_pending = False
         dashboard.tsi_detector_action_query_context = ""
         dashboard.tsi_detector_action_query_node_uid = ""
-
-        clear_tsi_detector_methods(
-            dashboard
-        )
+        clear_tsi_detector_methods(dashboard)
 
         hardware_combo.blockSignals(True)
         hardware_combo.clear()
@@ -2401,123 +2319,57 @@ def update_tsi_detector_selected_node_gate(
         action_combo.setEnabled(False)
         query_button.setEnabled(False)
         customize_button.setEnabled(False)
-
-        _tsi_detector_set_card3_enabled(
-            dashboard,
-            False,
-        )
-        _tsi_detector_set_status_text(
-            dashboard,
-            "Sensor Node Unavailable",
-        )
-
+        _tsi_detector_set_card3_enabled(dashboard, False)
+        _tsi_detector_set_status_text(dashboard, "Sensor Node Unavailable")
         dashboard.ui.label_tsi_detector_setup_info.setText(
             "Select a sensor node before querying detector actions."
         )
         return
 
-    if (
-        getattr(
-            dashboard,
-            "tsi_detector_last_node_uid",
-            "",
-        )
-        != selected_uid
-    ):
+    if getattr(dashboard, "tsi_detector_last_node_uid", "") != selected_uid:
         dashboard.tsi_detector_last_node_uid = selected_uid
         dashboard.tsi_detector_action_catalog = []
         dashboard.tsi_detector_action_catalog_node_uid = ""
         dashboard.tsi_detector_action_query_pending = False
         dashboard.tsi_detector_action_query_context = ""
         dashboard.tsi_detector_action_query_node_uid = ""
+        clear_tsi_detector_methods(dashboard)
 
-        clear_tsi_detector_methods(
-            dashboard
-        )
+    hardware_selection_changed = update_tsi_detector_hardware_combo(dashboard)
+    catalog_current = getattr(dashboard, "tsi_detector_action_catalog_node_uid", "") == selected_uid
 
-    update_tsi_detector_hardware_combo(
-        dashboard
-    )
+    if catalog_current and hardware_selection_changed:
+        _filter_tsi_detector_action_catalog(dashboard)
 
-    catalog_current = (
-        getattr(
-            dashboard,
-            "tsi_detector_action_catalog_node_uid",
-            "",
-        )
-        == selected_uid
-    )
-
-    if catalog_current:
-        _filter_tsi_detector_action_catalog(
-            dashboard
-        )
-
-    query_pending = bool(
-        getattr(
-            dashboard,
-            "tsi_detector_action_query_pending",
-            False,
-        )
-    )
-
+    query_pending = bool(getattr(dashboard, "tsi_detector_action_query_pending", False))
     hardware_combo.setEnabled(True)
-    query_button.setEnabled(
-        not query_pending
-    )
+    query_button.setEnabled(not query_pending)
 
     has_plugin = plugin_combo.count() > 0
     has_action = action_combo.count() > 0
-    is_customized = bool(
-        getattr(
-            dashboard,
-            "tsi_detector_customized",
-            False,
-        )
-    )
+    is_customized = bool(getattr(dashboard, "tsi_detector_customized", False))
 
     plugin_combo.setEnabled(has_plugin)
     action_combo.setEnabled(has_action)
     customize_button.setEnabled(has_action)
+    _tsi_detector_set_card3_enabled(dashboard, is_customized)
 
-    _tsi_detector_set_card3_enabled(
-        dashboard,
-        is_customized,
-    )
-
-    for widget in getattr(
-        dashboard,
-        "tsi_detector_parameter_widgets",
-        {},
-    ).values():
+    for widget in getattr(dashboard, "tsi_detector_parameter_widgets", {}).values():
         widget.setEnabled(True)
 
-    _tsi_detector_set_status_text(
-        dashboard,
-        "Idle",
-    )
+    _tsi_detector_set_status_text(dashboard, "Idle")
 
     if query_pending:
-        dashboard.ui.label_tsi_detector_setup_info.setText(
-            "Querying selected node for detector actions..."
-        )
+        dashboard.ui.label_tsi_detector_setup_info.setText("Querying selected node for detector actions...")
     elif not catalog_current:
-        dashboard.ui.label_tsi_detector_setup_info.setText(
-            "Query detector actions for the selected node."
-        )
-    elif not getattr(
-        dashboard,
-        "tsi_detector_action_catalog",
-        [],
-    ):
+        dashboard.ui.label_tsi_detector_setup_info.setText("Query detector actions for the selected node.")
+    elif not getattr(dashboard, "tsi_detector_action_catalog", []):
         dashboard.ui.label_tsi_detector_setup_info.setText(
             "No raster-capable detector actions are available on the selected node."
         )
     elif not has_action:
-        dashboard.ui.label_tsi_detector_setup_info.setText(
-            "No detector actions match the selected hardware."
-        )
-
+        dashboard.ui.label_tsi_detector_setup_info.setText("No detector actions match the selected hardware.")
+    
 
 def _tsi_detector_set_start_stop_button(
     dashboard: QtCore.QObject,
@@ -2582,9 +2434,21 @@ def _tsi_detector_set_controls_enabled(
         widget.setEnabled(enabled)
 
 
+def _tsi_detector_cleanup_remote_xpra(
+    dashboard: QtCore.QObject,
+):
+    """Clean up Xpra only when the active display belongs to Detector."""
+    if not getattr(dashboard, "tsi_detector_xpra_active", False):
+        return
+
+    dashboard.tsi_detector_xpra_active = False
+    _schedule_sa_survey_xpra_cleanup(dashboard)
+
+
 def _tsi_detector_set_running(
     dashboard: QtCore.QObject,
     node_uid: str,
+    operation_id: str,
 ):
     """
     Marks the unified detector action as running and updates Card 3/UI state.
@@ -2593,8 +2457,8 @@ def _tsi_detector_set_running(
     """
     dashboard.tsi_detector_running = True
     dashboard.tsi_detector_node_uid = node_uid or ""
-    dashboard.tsi_detector_opid = ""
-    dashboard.tsi_detector_waiting_for_opid = True
+    dashboard.tsi_detector_opid = operation_id or ""
+    dashboard.tsi_detector_waiting_for_opid = False
 
     stack = getattr(dashboard.ui, "stackedWidget_tsi_detector", None)
     if stack is not None:
@@ -2726,6 +2590,7 @@ def update_tsi_detector_status_from_selected_node(
 async def _slotTSI_DetectorStartStopClicked(dashboard: QtCore.QObject):
     """
     Starts/stops the unified TSI Detector action through the plugin action path.
+    Remote IP GUI actions use Xpra only as their presentation channel.
     """
     uid = getattr(dashboard, "selected_node_uid", "") or ""
 
@@ -2737,9 +2602,23 @@ async def _slotTSI_DetectorStartStopClicked(dashboard: QtCore.QObject):
         return
 
     if getattr(dashboard, "tsi_detector_running", False):
+        node_uid = str(getattr(dashboard, "tsi_detector_node_uid", "") or "").strip()
+        operation_id = str(getattr(dashboard, "tsi_detector_opid", "") or "").strip()
+
+        if not node_uid or not operation_id:
+            dashboard.logger.error(
+                "[TSI Detector] Cannot stop detector because its active node or operation ID is missing."
+            )
+            await fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
+                dashboard,
+                "Could not identify the active detector operation to stop.",
+            )
+            return
+
         try:
-            await dashboard.backend.tacticalNodeStop([uid])
+            await dashboard.backend.stopPluginOperation(node_uid, operation_id)
         finally:
+            _tsi_detector_cleanup_remote_xpra(dashboard)
             _tsi_detector_set_stopped(dashboard)
             dashboard.refreshStatusBarText()
         return
@@ -2771,9 +2650,37 @@ async def _slotTSI_DetectorStartStopClicked(dashboard: QtCore.QObject):
         )
         return
 
+    remote_gui = (
+        _sa_survey_remote_xpra_enabled(dashboard)
+        and str(parameters.get("run_mode") or "").strip().lower() == "gui"
+    )
+
+    if remote_gui:
+        _tsi_detector_set_status_text(dashboard, "Starting Remote Display...")
+
+        try:
+            xpra_display = await _sa_survey_start_remote_xpra(dashboard)
+        except Exception as error:
+            dashboard.logger.error(
+                f"Could not start remote Detector display: {error}"
+            )
+            _tsi_detector_set_status_text(dashboard, "Display Failed")
+            await fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
+                dashboard,
+                f"Could not start the remote Detector display:\n\n{error}",
+            )
+            return
+
+        dashboard.tsi_detector_xpra_active = True
+        parameters["_fissure_execution_context"] = {
+            "presentation": "xpra",
+            "display": xpra_display,
+        }
+
     _tsi_detector_set_running(
         dashboard,
         node_uid=uid,
+        operation_id=str(parameters.get("operation_id") or "").strip(),
     )
 
     try:
@@ -2784,6 +2691,7 @@ async def _slotTSI_DetectorStartStopClicked(dashboard: QtCore.QObject):
             parameters,
         )
     except Exception:
+        _tsi_detector_cleanup_remote_xpra(dashboard)
         _tsi_detector_set_stopped(dashboard)
         raise
 

@@ -58,22 +58,18 @@ def openDatabaseConnection(retries=10, delay=2) -> connection:
 
 def cacheTableData(source="Dashboard"):
     """
-    Loads a copy of frequently used tables for local access and to avoid network queries to the database.
+    Loads frequently used database tables into a local cache.
+    Report row counts and elapsed load times for the Dashboard startup cache.
     """
     if source == "Dashboard":
         tables_to_load = [
-            "archive_collection", 
-            "archive_favorites", 
-            "attack_categories",
-            "conditioner_flow_graphs",
-            "detector_flow_graphs",
-            "inspection_flow_graphs",
-            "triggers",
+            "archive_collection",
+            "archive_favorites",
             "protocols",
-            "attacks",
             "demodulation_flow_graphs",
             "modulation_types",
             "packet_types",
+            "packet_formats",
             "soi_data"
         ]
     elif source == "Protocol Discovery":
@@ -82,49 +78,65 @@ def cacheTableData(source="Dashboard"):
             "demodulation_flow_graphs",
             "modulation_types",
             "packet_types",
+            "packet_formats",
             "soi_data"
         ]
     else:
         tables_to_load = [
-            "archive_collection", 
-            "archive_favorites", 
+            "archive_collection",
+            "archive_favorites",
             "attack_categories",
-            "conditioner_flow_graphs",
-            "detector_flow_graphs",
-            "inspection_flow_graphs",
-            "triggers",
             "protocols",
             "attacks",
             "demodulation_flow_graphs",
             "modulation_types",
             "packet_types",
+            "packet_formats",
             "soi_data"
         ]
 
     # Load environment variables from .env file
-    load_dotenv(os.path.join(FISSURE_ROOT,".env"))
+    load_dotenv(os.path.join(FISSURE_ROOT, ".env"))
 
     conn = None
+    table_data = {}
+    # cache_start = time.perf_counter()
     try:
-        # Connect to PostgreSQL database
         conn = openDatabaseConnection()
+        # if source == "Dashboard":
+        #     print(f"[Database Cache] Connection: {time.perf_counter() - cache_start:.3f} s")
 
-        # Read Data
-        table_data = {}
         with conn.cursor() as cur:
             for table_name in tables_to_load:
-                query = f"SELECT * FROM {table_name};"
-                cur.execute(query)
+                # table_start = time.perf_counter()
+                if table_name == "packet_formats":
+                    # During gradual upgrades, a database without this new
+                    # table continues using the established TPMS validator.
+                    cur.execute("SELECT to_regclass('public.packet_formats');")
+                    if cur.fetchone()[0] is None:
+                        table_data[table_name] = []
+                        continue
+                    # Only opted-in profiles reach HIPRFISR's existing cache
+                    # distribution. Nodes receive selected definitions later.
+                    cur.execute("SELECT * FROM public.packet_formats WHERE enabled = true ORDER BY format_key;")
+                else:
+                    cur.execute(f"SELECT * FROM {table_name};")
                 rows = cur.fetchall()
                 table_data[table_name] = [convert_data_types(row) for row in rows]
-    
+                # if source == "Dashboard":
+                #     print(
+                #         f"[Database Cache] {table_name}: {len(rows):,} rows, "
+                #         f"{time.perf_counter() - table_start:.3f} s"
+                #     )
+
     except psycopg2.Error as e:
         print(f"Database error: {e}")
 
     finally:
-        # Close the connection if it was successfully opened
         if conn is not None:
             conn.close()
+        # if source == "Dashboard":
+        #     print(f"[Database Cache] Total: {time.perf_counter() - cache_start:.3f} s")
 
     return table_data
 
@@ -243,7 +255,51 @@ def getPacketTypesDirect(conn, protocol):
         if cur is not None:
             cur.close()
 
-    
+
+def getFrequencyLookupCandidates(frequency_mhz, max_results=10):
+    """Return ordered frequency_lookup candidates for one MHz value."""
+    try:
+        frequency_hz = float(frequency_mhz) * 1e6
+        limit = max(1, min(int(max_results or 10), 100))
+    except Exception as error:
+        return [], f"Invalid frequency: {error}"
+
+    conn = None
+    cur = None
+    try:
+        conn = openDatabaseConnection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT freq_low, freq_high, protocol_name, region, priority, notes
+            FROM frequency_lookup
+            WHERE freq_low <= %s AND freq_high >= %s
+            ORDER BY priority DESC, protocol_name ASC
+            LIMIT %s;
+            """,
+            (frequency_hz, frequency_hz, limit),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "freq_low": row[0],
+                "freq_high": row[1],
+                "protocol_name": row[2],
+                "region": row[3],
+                "priority": row[4],
+                "notes": row[5],
+            }
+            for row in rows
+        ], ""
+    except Exception as error:
+        return [], f"Frequency lookup failed: {error}"
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
+
 def classifyFrequencyFromTextDirect(text, protocol_only=False):
     """
     Extracts a frequency from the given text (supports HackRF sweep formats
@@ -701,13 +757,6 @@ def getMultiStageAttackNames(library, version):
     Returns the attack_name of each row in the attacks table if the category is "Multi-Stage".
     """
     return [row[2] for row in library["attacks"] if row[7] == "Multi-Stage"]
-
-
-def getFuzzingAttackNames(library, version):
-    """
-    Returns the attack_name of each row in the attacks table if the category is "Fuzzing".
-    """
-    return [row[1] + ' - ' + row[2] for row in library["attacks"] if row[7] == "Fuzzing"]
 
 
 def getFields(library, protocol, packet_name):

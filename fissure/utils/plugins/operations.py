@@ -14,20 +14,28 @@ from typing import Dict, Any, Union, Callable
 from fissure.Sensor_Node.utils.resources import Resource
 from fissure.utils.artifacts import ArtifactManager, get_artifact_manager
 
-_base_params = ['self', 'node_uid', 'logger', 'alert_callback', 'tak_cot_callback', 'detection_callback', 'status_callback', 'target_callback', 'soi_callback', 'artifact_manager']
+_base_params = [
+    'self', 
+    'node_uid', 
+    'logger', 
+    'alert_callback', 
+    'tak_cot_callback', 
+    'detection_callback', 
+    'status_callback', 
+    'target_callback', 
+    'soi_callback', 
+    'recommendation_callback', 
+    'inspection_callback',
+    'position_callback',
+    'artifact_manager'
+]
 
-async def send_alert(node_uid: str, opid: str, message: str, logger=logging.getLogger(__name__)) -> None:
-    """Placeholder for alert callback if none is provided.
+async def send_alert(node_uid="", opid="", message="", logger=logging.getLogger(__name__)) -> None:
+    """Placeholder alert callback used when an operation runs outside a Sensor Node."""
+    if isinstance(node_uid, dict):
+        logger.info(f"Alert: {node_uid}")
+        return
 
-    Parameters
-    ----------
-    node_uid : str
-        The sensor node UID
-    opid : str
-        The operation ID
-    message : str
-        The alert message.
-    """
     logger.info(f"Alert {node_uid}, {opid}: {message}")
 
 
@@ -80,6 +88,43 @@ async def send_soi(node_uid, opid, soi_dict, logger=None):
     if logger:
         logger.info(f"[soi] {node_uid} {opid}: {soi_dict}")
 
+async def send_recommendation(target_id, recommendation, logger=None):
+    if logger:
+        logger.info(f"[recommendation] target={target_id}: {recommendation}")
+
+async def send_inspection(
+    node_uid="",
+    opid="",
+    inspection=None,
+    final=True,
+    logger=None,
+):
+    """Placeholder Inspection callback used outside a Sensor Node."""
+    if not isinstance(inspection, dict):
+        if logger:
+            logger.warning("inspection_callback requires a dictionary payload")
+        return
+    if logger:
+        logger.info(
+            "[inspection] %s %s final=%s: %s",
+            node_uid,
+            opid,
+            bool(final),
+            inspection,
+        )
+    
+def get_position() -> Dict[str, Any]:
+    """Return an invalid position when an operation runs outside a Sensor Node."""
+    return {
+        "source": "",
+        "valid": False,
+        "stale": True,
+        "latitude": None,
+        "longitude": None,
+        "altitude": None,
+        "gps_time": "",
+    }
+        
 def setup_decorator(func):
     async def wrapper(self) -> bool:
         self.logger.info("Setting up operation environment...")
@@ -225,6 +270,9 @@ class Operation(object):
             status_callback: Union[Callable, None] = None, 
             target_callback: Union[Callable, None] = None, 
             soi_callback: Union[Callable, None] = None, 
+            recommendation_callback: Union[Callable, None] = None, 
+            inspection_callback: Union[Callable, None] = None,
+            position_callback: Union[Callable, None] = None,
             artifact_manager: Union[ArtifactManager, None] = None
         ) -> None:
         """Initialize the Operation class.
@@ -246,13 +294,20 @@ class Operation(object):
         target_callback : Union[Callable, None], optional
             Callback function for reporting targets to TAK and Dashboard
         soi_callback : Union[Callable, None], optional
-            Callback function for reporting SOIs to TAK and Dashboard               
+            Callback function for reporting SOIs to TAK and Dashboard
+        recommendation_callback : Union[Callable, None], optional
+            Callback function for attaching recommended follow-on actions to Targets
+        inspection_callback : Union[Callable, None], optional
+            Callback function for structured Inspection measurements and analysis results
+        position_callback : Union[Callable, None], optional
+            Callback returning the Sensor Node's current cached position snapshot
         artifact_manager : Union[ArtifactManager, None], optional
             ArtifactManager instance for managing artifacts, by default None to use the global artifact manager
         """
         # input parameters
         self.node_uid = node_uid
         self.logger = logger
+        self.execution_context = {}
         if alert_callback is None:
             alert_callback = send_alert
         if tak_cot_callback is None:
@@ -264,13 +319,22 @@ class Operation(object):
         if target_callback is None:
             target_callback = send_target
         if soi_callback is None:
-            soi_callback = send_soi                
+            soi_callback = send_soi
+        if recommendation_callback is None:
+            recommendation_callback = send_recommendation
+        if inspection_callback is None:
+            inspection_callback = send_inspection
+        if position_callback is None:
+            position_callback = get_position
         self.alert_callback = alert_callback
         self.tak_cot_callback = tak_cot_callback
         self.detection_callback = detection_callback
         self.status_callback = status_callback
         self.target_callback = target_callback
         self.soi_callback = soi_callback
+        self.recommendation_callback = recommendation_callback
+        self.inspection_callback = inspection_callback
+        self.position_callback = position_callback
         if artifact_manager is not None:
             self.artifact_manager = artifact_manager
         else:
@@ -297,6 +361,75 @@ class Operation(object):
             if p in params:
                 params.remove(p)
         return f"{self.__class__.__name__}(node_uid={self.node_uid}" + ''.join([f", {p}={getattr(self, p)}" for p in params]) + ")"
+
+
+    def get_subprocess_environment(self) -> Dict[str, str]:
+        """Build a subprocess environment for the operation execution context."""
+        env = os.environ.copy()
+        context = (
+            self.execution_context
+            if isinstance(self.execution_context, dict)
+            else {}
+        )
+
+        if str(context.get("presentation") or "").strip().lower() == "xpra":
+            display = str(context.get("display") or "").strip()
+            if re.fullmatch(r":\d+(?:\.\d+)?", display):
+                env["DISPLAY"] = display
+            env["QT_QPA_PLATFORM"] = "xcb"
+            env.pop("WAYLAND_DISPLAY", None)
+            env.pop("XAUTHORITY", None)
+
+        return env
+
+
+    async def wait_for_graphical_display(
+        self,
+        timeout_s: float = 60.0,
+    ) -> bool:
+        """Wait for an Xpra-backed X11 display before launching a GUI."""
+        context = (
+            self.execution_context
+            if isinstance(self.execution_context, dict)
+            else {}
+        )
+
+        if str(context.get("presentation") or "").strip().lower() != "xpra":
+            return True
+
+        display = str(context.get("display") or "").strip()
+        match = re.fullmatch(r":(\d+)(?:\.\d+)?", display)
+        if not match:
+            raise RuntimeError(
+                f"Invalid Xpra display in execution context: {display!r}"
+            )
+
+        socket_path = f"/tmp/.X11-unix/X{match.group(1)}"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(1.0, float(timeout_s))
+
+        self.logger.info(
+            f"Waiting for graphical display {display} at {socket_path}"
+        )
+
+        while not self._stop:
+            if os.path.exists(socket_path):
+                # Give the X server a moment to finish initialization after
+                # creating its Unix-domain socket.
+                await asyncio.sleep(0.25)
+                self.logger.info(
+                    f"Graphical display {display} is ready."
+                )
+                return True
+
+            if loop.time() >= deadline:
+                raise RuntimeError(
+                    f"Timed out waiting for graphical display {display}."
+                )
+
+            await asyncio.sleep(0.1)
+
+        return False
 
 
     @classmethod

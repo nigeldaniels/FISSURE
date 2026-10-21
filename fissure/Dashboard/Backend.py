@@ -725,6 +725,19 @@ class DashboardBackend:
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
+    async def newCoTLogSession(self):
+        """Request a fresh CoT logging session from HIPRFISR."""
+        if self.hiprfisr_connected is not True:
+            return
+
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "newCoTLogSession",
+            fissure.comms.MessageFields.PARAMETERS: {},
+        }
+        await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+
+
     async def updateLoggingLevels(self, new_console_level, new_file_level):
         """
         Updates the console and file logging levels for all components.
@@ -745,94 +758,6 @@ class DashboardBackend:
                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
                 fissure.comms.MessageFields.MESSAGE_NAME: "updateLoggingLevels",
                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def attackFlowGraphStart(self, node_uid, flow_graph_filepath, variable_names, variable_values, file_type, run_with_sudo, autorun_index, trigger_values):
-        """
-        Sends a message to start a single-stage attack.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {"node_uid": node_uid, "flow_graph_filepath": flow_graph_filepath, "variable_names": variable_names, "variable_values": variable_values, "file_type": file_type, "run_with_sudo": run_with_sudo, "autorun_index": autorun_index, "trigger_values": trigger_values}
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "attackFlowGraphStart",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def attackFlowGraphStop(self, node_uid, parameter, autorun_index):
-        """
-        Sends a message to stop a single-stage attack.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid, 
-                "parameter": parameter, 
-                "autorun_index": autorun_index
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "attackFlowGraphStop",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def multiStageAttackStart(
-        self, 
-        node_uid="",
-        filenames=[],
-        variable_names=[],
-        variable_values=[],
-        durations=[],
-        repeat=False,
-        file_types=[],
-        autorun_index=0,
-        trigger_values=[]
-    ):
-        """
-        Sends a message to start a multi-stage attack.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "filenames": filenames,
-                "variable_names": variable_names,
-                "variable_values": variable_values,
-                "durations": durations,
-                "repeat": repeat,
-                "file_types": file_types,
-                "autorun_index": autorun_index,
-                "trigger_values": trigger_values
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "multiStageAttackStart",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def multiStageAttackStop(self, node_uid="", autorun_index=0):
-        """
-        Sends a message to stop a multi-stage attack.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "autorun_index": autorun_index,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "multiStageAttackStop",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
             }
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
@@ -956,6 +881,26 @@ class DashboardBackend:
                     fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
             }
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+
+
+    async def refreshSensorNodeActivity(self, node_uid="", log_limit=100):
+        """Request one bounded read-only Activity snapshot from the selected Sensor Node."""
+        if self.hiprfisr_connected is not True:
+            return
+
+        PARAMETERS = {
+            "node_uid": node_uid,
+            "log_limit": log_limit,
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "refreshSensorNodeActivity",
+            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        }
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
     async def deleteSensorNodeFile(self, node_uid="", sensor_node_file=""):
@@ -1256,6 +1201,22 @@ class DashboardBackend:
             )
 
 
+    async def classifierLibraryMatch(self, request_id="", frequency_mhz=None, max_results=10):
+        """Request hub-side Classifier library matches for the supplied evidence."""
+        if self.hiprfisr_connected is not True:
+            return
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "classifierLibraryMatch",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "request_id": str(request_id or ""),
+                "frequency_mhz": frequency_mhz,
+                "max_results": int(max_results or 10),
+            },
+        }
+        await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+
+
     async def searchLibrary(self, soi_data="", field_data=""):
         """
         Sends message to search library.yaml for occurences of hex_str.
@@ -1272,40 +1233,6 @@ class DashboardBackend:
                     fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
             }
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg) 
-
-
-    async def addToLibrary(
-        self,
-        protocol_name="",
-        packet_name="",
-        packet_data="",
-        soi_data="",
-        modulation_type="",
-        demodulation_fg_data="",
-        attack="",
-        dissector="",
-    ):
-        """
-        Adds new data to the library.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name,
-                "packet_name": packet_name,
-                "packet_data": packet_data,
-                "soi_data": soi_data,
-                "modulation_type": modulation_type,
-                "demodulation_fg_data": demodulation_fg_data,
-                "attack": attack,
-                "dissector": dissector,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "addToLibrary",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
     async def removeFromLibrary(
@@ -1655,55 +1582,6 @@ class DashboardBackend:
             }
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
-
-    async def physicalFuzzingStop(self, node_uid=""):
-        """
-        Sends message to Sensor Node to stop the physical fuzzing being performed on a running flow graph.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "physicalFuzzingStop",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-    
-    async def physicalFuzzingStart(
-        self, 
-        node_uid="",
-        fuzzing_variables=[],
-        fuzzing_type="",
-        fuzzing_min=0,
-        fuzzing_max=0,
-        fuzzing_update_period=0,
-        fuzzing_seed_step=0,
-    ):
-        """
-        Command for starting physical fuzzing on a running flow graph.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "fuzzing_variables": fuzzing_variables,
-                "fuzzing_type": fuzzing_type,
-                "fuzzing_min": fuzzing_min,
-                "fuzzing_max": fuzzing_max,
-                "fuzzing_update_period": fuzzing_update_period,
-                "fuzzing_seed_step": fuzzing_seed_step,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "physicalFuzzingStart",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
     
     async def startTSI_Conditioner(
         self,
@@ -1783,42 +1661,61 @@ class DashboardBackend:
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
-    async def startScapy(self, node_uid="", interface="", interval=0, loop=False, operating_system=""):
-        """
-        Signals to Sensor Node to start Scapy.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "interface": interface,
-                "interval": interval,
-                "loop": loop,
-                "operating_system": operating_system,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "startScapy",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+    async def refreshScapyInterfaces(self, node_uid=""):
+        """Request Scapy-visible interfaces from the selected Sensor Node."""
+        if self.hiprfisr_connected is not True:
+            return
 
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "refreshScapyInterfaces",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "node_uid": str(node_uid or ""),
+            },
+        }
 
-    async def stopScapy(self, node_uid=""):
-        """
-        Signals to Sensor Node to stop Scapy.
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "stopScapy",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+    
+
+    async def startScapyTransmission(
+        self,
+        node_uid="",
+        operation_id="",
+        interface="",
+        method="",
+        interval=0.1,
+        count=1,
+        loop=False,
+        packet_hex="",
+    ):
+        """Start a Scapy transmission on the selected Sensor Node."""
+        if self.hiprfisr_connected is not True:
+            return
+
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "startScapyTransmission",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "node_uid": str(node_uid or ""),
+                "operation_id": str(operation_id or ""),
+                "interface": str(interface or ""),
+                "method": str(method or ""),
+                "interval": float(interval),
+                "count": int(count),
+                "loop": bool(loop),
+                "packet_hex": str(packet_hex or ""),
+            },
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )    
 
 
     async def retrieveDatabaseCache(self, refresh_frontend_widgets=False):
@@ -1838,298 +1735,100 @@ class DashboardBackend:
             await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
 
 
-    async def checkPluginStatus(self, node_uid: str):
-        """Check Status of Plugins on Sensor Node
+    async def refreshPluginInventory(self, node_uid: str):
+        """Request Hub/selected-node plugin inventory metadata."""
+        if self.hiprfisr_connected is not True:
+            return
 
-        Parameters
-        ----------
-        node_uid: str
-            Sensor node ID
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "checkPlugin",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        PARAMETERS = {
+            "node_uid": node_uid,
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "refreshPluginInventory",
+            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        }
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-    async def transferPlugins(self, node_uid: str, plugin_names: List[str]):
-        """Transfer Plugins from HIPFISR to Sensor Node
+    async def repairPluginSetup(self, node_uid: str, plugin_name: str):
+        """Request setup repair for one plugin on the selected Sensor Node."""
+        if self.hiprfisr_connected is not True:
+            return
 
-        Parameters
-        ----------
-        node_uid: str
-            Sensor node ID
-        plugin_names : str
-            Plugin names with file extension or no extension if folder
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "plugin_names": plugin_names
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "transferPlugins",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        PARAMETERS = {
+            "node_uid": node_uid,
+            "plugin_name": plugin_name,
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "repairPluginSetup",
+            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        }
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-    async def installPlugins(self, node_uid: str, plugin_names: List[str]):
-        """Install Plugins on Sensor Node
+    async def deployPlugin(
+        self,
+        node_uid: str,
+        plugin_name: str,
+    ):
+        """Request one Hub -> remote Sensor Node plugin Deploy/Update."""
+        if self.hiprfisr_connected is not True:
+            return
 
-        Parameters
-        ----------
-        node_uid: str
-            Sensor node ID
-        plugin_names : str
-            Plugin names with file extension or no extension if folder
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "plugin_names": plugin_names
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "installPlugins",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        PARAMETERS = {
+            "node_uid": node_uid,
+            "plugin_name": plugin_name,
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "deployPlugin",
+            fissure.comms.MessageFields.PARAMETERS:
+                PARAMETERS,
+        }
 
-
-    async def uninstallPlugin(self, node_uid: str, plugin_name: str):
-        """Uninstall Plugin on Sensor Node
-
-        Parameters
-        ----------
-        node_uid: str
-            Sensor node ID
-        plugin_name : str
-            Plugin name with file extension or no extension if folder
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "node_uid": node_uid,
-                "plugin_name": plugin_name
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "uninstallPlugin",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-    async def removePlugin(self, node_uid: str, plugin_name: str):
-        """Remove Plugin on Sensor Node
+    async def removeManagedPlugin(
+        self,
+        node_uid: str,
+        plugin_name: str,
+    ):
+        """Request managed plugin removal from the selected Sensor Node."""
+        if self.hiprfisr_connected is not True:
+            return
 
-        **WARNING**: This will remove the plugin from the sensor node file system
+        PARAMETERS = {
+            "node_uid": node_uid,
+            "plugin_name": plugin_name,
+        }
 
-        Parameters
-        ----------
-        node_uid: str
-            Sensor node ID
-        plugin_name : str
-            Plugin name with file extension or no extension if folder
-        """
-        if node_uid:
-            # Send the Message
-            if self.hiprfisr_connected is True:
-                PARAMETERS = {
-                    "node_uid": node_uid,
-                    "plugin_name": plugin_name
-                }
-                msg = {
-                        fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                        fissure.comms.MessageFields.MESSAGE_NAME: "removePlugin",
-                        fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-                }
-                await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "removeManagedPlugin",
+            fissure.comms.MessageFields.PARAMETERS:
+                PARAMETERS,
+        }
 
-
-    # async def requestPluginNamesHiprfisr(self):
-    #     """
-    #     Request Plugin Names from HIPRFISR
-    #     """
-    #     # Send the Message
-    #     if self.hiprfisr_connected is True:
-    #         PARAMETERS = {
-    #         }
-    #         msg = {
-    #                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-    #                 fissure.comms.MessageFields.MESSAGE_NAME: "requestPluginNamesHiprfisr",
-    #                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    #         }
-    #         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    # async def openPluginHiprfisr(self, plugin_name: str):
-    #     """
-    #     Open Plugin for Editing on HIPRFISR
-    #     """
-    #     # Send the Message
-    #     if self.hiprfisr_connected is True:
-    #         PARAMETERS = {
-    #             "plugin_name": plugin_name
-    #         }
-    #         msg = {
-    #                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-    #                 fissure.comms.MessageFields.MESSAGE_NAME: "openPluginHiprfisr",
-    #                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    #         }
-    #         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    # async def closePluginHiprfisr(self):
-    #     """
-    #     Close Plugin for Editing on HIPRFISR
-    #     """
-    #     # Send the Message
-    #     if self.hiprfisr_connected is True:
-    #         PARAMETERS = {
-    #         }
-    #         msg = {
-    #                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-    #                 fissure.comms.MessageFields.MESSAGE_NAME: "closePluginHiprfisr",
-    #                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    #         }
-    #         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    # async def pluginDelete(self, plugin_name: str, delete_from_library: bool):
-    #     """
-    #     Deletes a plugin folder and optionally removes it from the library/database.
-    #     """
-    #     # Send the Message
-    #     if self.hiprfisr_connected is True:
-    #         PARAMETERS = {
-    #             "plugin_name": plugin_name,
-    #             "delete_from_library": delete_from_library
-    #         }
-    #         msg = {
-    #                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-    #                 fissure.comms.MessageFields.MESSAGE_NAME: "pluginDelete",
-    #                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    #         }
-    #         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    # async def pluginApplyChanges(self, table_data_json: dict, supporting_files_data_json: dict):
-    #     """
-    #     Overwrites the csv files with table data.
-    #     """
-    #     # Send the Message
-    #     if self.hiprfisr_connected is True:
-    #         PARAMETERS = {
-    #             "table_data_json": table_data_json,
-    #             "supporting_files_data_json": supporting_files_data_json
-    #         }
-    #         msg = {
-    #                 fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-    #                 fissure.comms.MessageFields.MESSAGE_NAME: "pluginApplyChanges",
-    #                 fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-    #         }
-    #         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def pluginAddProtocolHiprfisr(self, protocol_name: str):
-        """
-        Add Protocol to Open Plugin on HIPRFISR
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "pluginAddProtocolHiprfisr",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def pluginSetProtocolParameters(self, protocol_name: str, parameters: dict):
-        """
-        
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name,
-                "parameters": parameters
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "pluginSetProtocolParameters",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def pluginAddProtocolModType(self, protocol_name: str, mod_type: str):
-        """
-        
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name,
-                "mod_type": mod_type
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "pluginAddProtocolModType",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def pluginRemoveProtocolModTypes(self, protocol_name: str, mod_types: List[str]):
-        """
-        
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name,
-                "mod_types": mod_types
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "pluginRemoveProtocolModTypes",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
-
-
-    async def pluginEditProtocolPktTypes(self, protocol_name: str, pkt_types: List[List[str]]):
-        """
-        
-        """
-        # Send the Message
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "protocol_name": protocol_name,
-                "pkt_types": pkt_types
-            }
-            msg = {
-                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-                    fissure.comms.MessageFields.MESSAGE_NAME: "pluginEditProtocolPktTypes",
-                    fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-            }
-            await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
     async def findGPS_Coordinates(self, node_uid="", gps_source="", format=""):
@@ -2149,34 +1848,115 @@ class DashboardBackend:
         await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, find_gps_cmd)
 
 
-    async def enableDisableListener(self, listener_type="", listener_name="", parameters={}):
-        """
-        Creates a listener if it does not exist and then toggles its enable/disable status.
-        """
-        PARAMETERS = {
-            "listener_type": listener_type,
-            "listener_name": listener_name,
-            "parameters": parameters
+    async def queryListeningPosts(self):
+        """Request the authoritative HIPRFISR Listening Post inventory."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "queryListeningPosts",
+            fissure.comms.MessageFields.PARAMETERS:
+                {},
         }
-        listener_cmd = {
-            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-            fissure.comms.MessageFields.MESSAGE_NAME: "enableDisableListener",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
-        }
-        await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, listener_cmd)
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
-    async def deleteListener(self, listener_name=""):
-        """
-        Deletes an existing listener.
-        """
-        PARAMETERS = {"listener_name": listener_name}
-        listener_cmd = {
-            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
-            fissure.comms.MessageFields.MESSAGE_NAME: "deleteListener",
-            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+    async def saveListeningPost(
+        self,
+        definition=None,
+    ):
+        """Create or update one persisted HIPRFISR Listening Post."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "saveListeningPost",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "definition": definition or {},
+            },
         }
-        await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, listener_cmd)
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+    async def startListeningPost(
+        self,
+        post_id="",
+    ):
+        """Start one persisted Listening Post on HIPRFISR."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "startListeningPost",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "post_id": post_id,
+            },
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+    async def stopListeningPost(
+        self,
+        post_id="",
+    ):
+        """Stop one running Listening Post on HIPRFISR."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "stopListeningPost",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "post_id": post_id,
+            },
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+    async def clearListeningPostActivity(self, post_id=""):
+        """Clear the bounded HIPRFISR Recent Activity buffer for one Listening Post."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "clearListeningPostActivity",
+            fissure.comms.MessageFields.PARAMETERS: {"post_id": post_id},
+        }
+        await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+
+
+    async def deleteListeningPost(
+        self,
+        post_id="",
+    ):
+        """Delete one stopped persisted Listening Post."""
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "deleteListeningPost",
+            fissure.comms.MessageFields.PARAMETERS: {
+                "post_id": post_id,
+            },
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
     async def connectToSensorNodeMeshtastic(self, node_uid, serial_port, serial_baud_rate):
@@ -2735,6 +2515,61 @@ class DashboardBackend:
         )
 
 
+    async def tacticalTargetPatch(
+            self,
+            target_id,
+            patch,
+            history_entry=None,
+            artifact_id="",
+        ):
+            if history_entry is None:
+                history_entry = {}
+
+            if self.hiprfisr_connected is True:
+                parameters = {
+                    "target_id": target_id,
+                    "patch": patch,
+                    "history_entry": history_entry,
+                    "artifact_id": artifact_id or "",
+                }
+
+                msg = {
+                    fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+                    fissure.comms.MessageFields.MESSAGE_NAME: "targetPatch",
+                    fissure.comms.MessageFields.PARAMETERS: parameters,
+                }
+
+                await self.hiprfisr_socket.send_msg(fissure.comms.MessageTypes.COMMANDS, msg)
+
+
+    async def tacticalTargetRecommendation(
+        self,
+        target_id,
+        mode="add",
+        recommendation=None,
+        recommendation_id="",
+    ):
+        """Add/remove one recommended action on an authoritative Target."""
+        if self.hiprfisr_connected is not True:
+            return
+
+        PARAMETERS = {
+            "target_id": target_id,
+            "mode": mode,
+            "recommendation": recommendation or {},
+            "recommendation_id": recommendation_id or "",
+        }
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER: fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME: "targetRecommendation",
+            fissure.comms.MessageFields.PARAMETERS: PARAMETERS,
+        }
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
     async def tacticalPromoteSoiToTarget(
         self,
         target_id,
@@ -2742,36 +2577,15 @@ class DashboardBackend:
         history_entry=None,
         artifact_id="",
     ):
-        if history_entry is None:
-            history_entry = {}
-
-        if self.hiprfisr_connected is True:
-            PARAMETERS = {
-                "target_id": target_id,
-                "patch": patch,
-                "history_entry": history_entry,
-                "artifact_id": artifact_id or "",
-            }
-
-            msg = {
-                fissure.comms.MessageFields.IDENTIFIER:
-                    fissure.comms.Identifiers.DASHBOARD,
-                fissure.comms.MessageFields.MESSAGE_NAME:
-                    "targetPatch",
-                fissure.comms.MessageFields.PARAMETERS:
-                    PARAMETERS,
-            }
-
-            await self.hiprfisr_socket.send_msg(
-                fissure.comms.MessageTypes.COMMANDS,
-                msg,
-            )
+        await self.tacticalTargetPatch(target_id, patch, history_entry, artifact_id)
 
 
     async def tacticalTargetsGeolocateStart(
         self,
         target_id,
         search_similar_targets=False,
+        preferred_node_uid="",
+        similar_target_ids=None,
     ):
         if self.hiprfisr_connected is True:
             PARAMETERS = {
@@ -2780,6 +2594,12 @@ class DashboardBackend:
                 "parameters": {
                     "target_id": target_id,
                     "search_similar_targets": search_similar_targets,
+                    "preferred_node_uid": str(preferred_node_uid or "").strip(),
+                    "similar_target_ids": [
+                        str(value)
+                        for value in (similar_target_ids or [])
+                        if str(value or "").strip()
+                    ],
                 },
             }
 
@@ -2824,6 +2644,91 @@ class DashboardBackend:
                 fissure.comms.MessageTypes.COMMANDS,
                 msg,
             )
+
+    async def signalAnalysisSoisRefresh(self):
+        """Request HIPRFISR's authoritative SOI set across all nodes."""
+        await self.tacticalNodeSoisRefresh("")
+
+
+    async def signalAnalysisSoiUpdate(
+        self,
+        node_uid,
+        soi_id,
+        frequency_mhz=None,
+        status="",
+        operation_id="",
+        artifact_id="",
+        summary=None,
+        lat=None,
+        lon=None,
+        alt=None,
+        observation_time=None,
+    ):
+        """Send a Dashboard-authored SOI update to HIPRFISR."""
+        if summary is None:
+            summary = {}
+
+        if self.hiprfisr_connected is not True:
+            return
+
+        PARAMETERS = {
+            "node_uid": node_uid or "",
+            "soi_id": soi_id or "",
+            "frequency_mhz": frequency_mhz,
+            "status": status or "",
+            "operation_id": operation_id or "",
+            "artifact_id": artifact_id or "",
+            "summary": summary,
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "observation_time": observation_time,
+        }
+
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "soiUpdate",
+            fissure.comms.MessageFields.PARAMETERS:
+                PARAMETERS,
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
+
+
+    async def signalAnalysisSoiDelete(
+        self,
+        soi_key,
+        node_uid="",
+        soi_id="",
+    ):
+        """Delete one hub-backed SOI without deleting linked artifacts."""
+        if self.hiprfisr_connected is not True:
+            return
+
+        PARAMETERS = {
+            "soi_key": soi_key or "",
+            "node_uid": node_uid or "",
+            "soi_id": soi_id or "",
+        }
+
+        msg = {
+            fissure.comms.MessageFields.IDENTIFIER:
+                fissure.comms.Identifiers.DASHBOARD,
+            fissure.comms.MessageFields.MESSAGE_NAME:
+                "deleteSoi",
+            fissure.comms.MessageFields.PARAMETERS:
+                PARAMETERS,
+        }
+
+        await self.hiprfisr_socket.send_msg(
+            fissure.comms.MessageTypes.COMMANDS,
+            msg,
+        )
 
 
     async def tacticalNodeSoisRefresh(self, node_uid):

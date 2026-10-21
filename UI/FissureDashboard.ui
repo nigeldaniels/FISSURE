@@ -665,6 +665,7 @@
      <addaction name="menuMinimodem"/>
      <addaction name="actionAudioRecord"/>
      <addaction name="actionEnscribe"/>
+     <addaction name="actionAudio_Stream_Receiver"/>
     </widget>
     <widget class="QMenu" name="menuRadiosonde">
      <property name="title">
@@ -738,6 +739,7 @@
      </property>
      <addaction name="actionVLC"/>
      <addaction name="actionSimpleScreenRecorder"/>
+     <addaction name="actionVideo_Stream_Receiver"/>
     </widget>
     <widget class="QMenu" name="menuMapping">
      <property name="title">
@@ -967,7 +969,6 @@
      <addaction name="actionDemo_TSI_Feature_Extractor_Tab"/>
      <addaction name="actionDemo_TSI_Classifier_Tab"/>
      <addaction name="actionDemo_TSI_Direction_Finding_Tab"/>
-     <addaction name="actionDemo_TSI_SOI_Aggregator_Tab"/>
     </widget>
     <widget class="QMenu" name="menuDemo_PD_Tab">
      <property name="enabled">
@@ -987,10 +988,6 @@
      </property>
      <addaction name="actionDemo_Attack_All"/>
      <addaction name="separator"/>
-     <addaction name="actionDemo_Attack_Single_Stage_Tab"/>
-     <addaction name="actionDemo_Attack_Multi_Stage_Tab"/>
-     <addaction name="actionDemo_Attack_Fuzzing_Tab"/>
-     <addaction name="actionDemo_Attack_History_Tab"/>
      <addaction name="actionDemo_Attack_Packet_Crafter_Tab"/>
     </widget>
     <widget class="QMenu" name="menuDemo_IQ_Data_Tab">
@@ -1103,6 +1100,9 @@
     <addaction name="actionTAK_Start_Docker_Containers"/>
     <addaction name="actionTAK_Stop_Docker_Containers"/>
     <addaction name="actionConnect_to_TAK_Server"/>
+    <addaction name="actionNew_CoT_Log_Session"/>
+    <addaction name="actionReplay_CoT_to_TAK"/>
+    <addaction name="actionReplay_CoT_to_TAK_Dashboard"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuView"/>
@@ -3593,6 +3593,31 @@
   <action name="actionMobile_Atlas_Creator">
    <property name="text">
     <string>Mobile Atlas Creator</string>
+   </property>
+  </action>
+  <action name="actionAudio_Stream_Receiver">
+   <property name="text">
+    <string>Audio Stream Receiver</string>
+   </property>
+  </action>
+  <action name="actionVideo_Stream_Receiver">
+   <property name="text">
+    <string>Video Stream Receiver</string>
+   </property>
+  </action>
+  <action name="actionReplay_CoT_to_TAK">
+   <property name="text">
+    <string>Replay CoT to TAK</string>
+   </property>
+  </action>
+  <action name="actionReplay_CoT_to_TAK_Dashboard">
+   <property name="text">
+    <string>Replay CoT to TAK + Dashboard</string>
+   </property>
+  </action>
+  <action name="actionNew_CoT_Log_Session">
+   <property name="text">
+    <string>New CoT Log Session</string>
    </property>
   </action>
  </widget>

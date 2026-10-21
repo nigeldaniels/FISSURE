@@ -113,6 +113,14 @@ sudo apt-get install -y gnome-terminal dbus-x11 gsettings-desktop-schemas  # App
 
 sudo apt-get install -y python3-pyproj
 sudo apt-get install -y python3-uhd
+sudo apt-get install -y python3-gi
+sudo apt-get install -y gstreamer1.0-tools
+sudo apt-get install -y gstreamer1.0-plugins-base
+sudo apt-get install -y gstreamer1.0-plugins-good
+sudo apt-get install -y gstreamer1.0-plugins-bad
+sudo apt-get install -y gstreamer1.0-plugins-ugly
+sudo apt-get install -y gstreamer1.0-libav
+sudo apt-get install -y gir1.2-gst-rtsp-server-1.0
 
 #. ~/.bashrc  # TODO: container fix
 
@@ -131,14 +139,13 @@ fi
 echo "Using bin path: $bin_path"
 mkdir -p "$bin_path"
 
-# Add ~/.local/bin to PATH if missing (for normal installs)
+# Add ~/.local/bin to PATH for future shells on normal host installs.
 if [ "$bin_path" = "$HOME/.local/bin" ]; then
-  if grep -Fq "~/.local/bin" ~/.bashrc
-  then
-    echo "~/.local/bin is already in ~/.bashrc"
-  else
-    printf "\\n%s\\n" "export PATH=~/.local/bin:$PATH" >> ~/.bashrc
-  fi
+    if grep -Fq '$HOME/.local/bin' "$HOME/.bashrc"; then
+        echo "\$HOME/.local/bin is already in ~/.bashrc"
+    else
+        printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    fi
 fi
 
 # Create fissure command
@@ -317,7 +324,7 @@ else
             sleep 2
         done
         echo "[*] Restoring FISSURE database..."
-        pg_restore -U $POSTGRES_USER -d $POSTGRES_DB -h $POSTGRES_HOST -p $POSTGRES_EXTERNAL_PORT -v db/fissure_db_dump.sql
+        pg_restore -U $POSTGRES_USER -d $POSTGRES_DB -h $POSTGRES_HOST -p $POSTGRES_EXTERNAL_PORT -v db/fissure_db_dump.backup
     '
 fi
 ########## Verify ##########
@@ -391,6 +398,79 @@ else
     test -f '""" + fissure_directory + """/certificates/server/server.key_secret' &&
     test -f '""" + fissure_directory + """/certificates/clients/client_0.key' &&
     test -f '""" + fissure_directory + """/certificates/clients/client_0.key_secret'
+fi
+""", True, 'Minimum Install'))
+
+# Xpra
+programs_ubuntu24_04.append(('Xpra',
+"""if [ -n "$APPTAINER_CONTAINER" ] || [ -n "$APPTAINER_NAME" ]; then
+    echo "[*] Skipping Xpra installation inside Apptainer."
+else
+    echo "[*] Installing Xpra 6.5.2 from source."
+
+    sudo apt-get update
+
+    sudo apt-get install -y build-essential
+    sudo apt-get install -y python3-dev
+    sudo apt-get install -y python3-setuptools
+    sudo apt-get install -y python3-pip
+    sudo apt-get install -y cython3
+    sudo apt-get install -y pkg-config
+    sudo apt-get install -y wget
+    sudo apt-get install -y xterm
+    sudo apt-get install -y xvfb
+    sudo apt-get install -y xauth
+    sudo apt-get install -y openssh-client
+    sudo apt-get install -y libxxhash-dev
+    sudo apt-get install -y libgtk-3-dev
+    sudo apt-get install -y libx11-dev
+    sudo apt-get install -y libxext-dev
+    sudo apt-get install -y libxfixes-dev
+    sudo apt-get install -y libxdamage-dev
+    sudo apt-get install -y libxcomposite-dev
+    sudo apt-get install -y libxrandr-dev
+    sudo apt-get install -y libxtst-dev
+    sudo apt-get install -y libxi-dev
+    sudo apt-get install -y libxcursor-dev
+    sudo apt-get install -y libxkbfile-dev
+    sudo apt-get install -y libxres-dev
+    sudo apt-get install -y libgirepository1.0-dev
+    sudo apt-get install -y python3-gi
+    sudo apt-get install -y python-gi-dev
+    sudo apt-get install -y python3-cairo-dev
+    sudo apt-get install -y libx264-dev
+    sudo apt-get install -y libvpx-dev
+
+    xpra_install_dir="$HOME/Installed_by_FISSURE/xpra"
+    mkdir -p "$xpra_install_dir"
+
+    sudo rm -rf "$xpra_install_dir/xpra-6.5.2"
+    sudo rm -f "$xpra_install_dir/xpra-6.5.2.tar.gz"
+
+    cd "$xpra_install_dir"
+
+    wget https://github.com/Xpra-org/xpra/archive/refs/tags/v6.5.2.tar.gz \
+        -O xpra-6.5.2.tar.gz
+
+    tar -xzf xpra-6.5.2.tar.gz
+    cd xpra-6.5.2
+
+    python3 setup.py build
+    sudo python3 setup.py install --prefix=/usr/local
+
+    hash -r
+
+    cd "$HOME"
+    sudo rm -rf "$xpra_install_dir/xpra-6.5.2"
+    sudo rm -f "$xpra_install_dir/xpra-6.5.2.tar.gz"
+fi
+
+########## Verify ##########
+if [ -n "$APPTAINER_CONTAINER" ] || [ -n "$APPTAINER_NAME" ]; then
+    echo "[*] Skipping Xpra verification inside Apptainer."
+else
+    test -x /usr/local/bin/xpra &&
+    /usr/local/bin/xpra --version 2>&1 | grep -q '6\\.5\\.2'
 fi
 """, True, 'Minimum Install'))
 
@@ -1458,13 +1538,21 @@ ls /usr/local/lib/python*/*/gnuradio/zwave_poore
 
 # QSpectrumAnalyzer
 programs_ubuntu24_04.append(('QSpectrumAnalyzer (36.00 kB)',
-"""#sudo add-apt-repository -y ppa:myriadrf/drivers
-#sudo apt-get -y update
-sudo apt-get install -y python3-pip python3-pyqt5 python3-numpy python3-scipy python3-soapysdr  # No package: soapysdr
-sudo apt-get install -y soapysdr-module-rtlsdr soapysdr-module-airspy soapysdr-module-hackrf soapysdr-module-lms7
-python3 -m pip install --user qspectrumanalyzer --break-system-packages  # log in again, run without sudo
+"""sudo apt-get install -y python3-pip
+sudo apt-get install -y python3-pyqt5
+sudo apt-get install -y python3-numpy
+sudo apt-get install -y python3-scipy
+sudo apt-get install -y python3-soapysdr
+sudo apt-get install -y soapysdr-module-rtlsdr
+sudo apt-get install -y soapysdr-module-airspy
+sudo apt-get install -y soapysdr-module-hackrf
+sudo apt-get install -y soapysdr-module-lms7
+
+python3 -m pip install --user qspectrumanalyzer --break-system-packages
+
 ########## Verify ##########
-ls ~/.local/bin/qspectrumanalyzer
+test -x "$HOME/.local/bin/qspectrumanalyzer" &&
+QT_PREFERRED_BINDING=PyQt5 python3 -c "import Qt; assert Qt.__binding__ == 'PyQt5'; import qspectrumanalyzer"
 """,True,'SDR'))
 
 # GQRX
@@ -1512,7 +1600,7 @@ ls /usr/bin/designer
 programs_ubuntu24_04.append(('Grip (1.02 MB)',
 """python3 -m pip install grip --break-system-packages
 ########## Verify ##########
-ls /usr/local/bin/grip
+grip --help
 """,True,'Development'))
 
 # Kismet
@@ -2097,7 +2185,7 @@ python3 -m pip install python-dateutil --break-system-packages
 python3 -m pip install flask_table --break-system-packages
 ########## Verify ##########
 ls /usr/local/bin/monitor_rtl433
-""",True,'433 MHz'))
+""",False,'433 MHz'))
 
 # scan-ssid
 programs_ubuntu24_04.append(('scan-ssid (232.00 kB)',
@@ -2178,7 +2266,7 @@ sudo apt remove -y python3-cryptography
 python3 -m pip install --upgrade PyGPSClient --break-system-packages
 python3 -m pip install --upgrade cryptography --break-system-packages
 ########## Verify ##########
-ls /usr/local/bin/pygpsclient
+pygpsclient -h
 """,True,'GPS'))
 
 # Gpredict
@@ -2197,18 +2285,25 @@ foxtrotgps --help
 
 # multimon-ng
 programs_ubuntu24_04.append(('multimon-ng (8.86 MB)',
-"""sudo apt-get install -y libpulse-dev
+"""sudo apt-get install -y build-essential
+sudo apt-get install -y cmake
+sudo apt-get install -y libpulse-dev
+sudo apt-get install -y libx11-dev
+
 mkdir -p ~/Installed_by_FISSURE
 cd ~/Installed_by_FISSURE
-git clone https://github.com/EliasOenal/multimonNG.git
+
+sudo rm -rf multimonNG
+git clone https://github.com/EliasOenal/multimon-ng.git multimonNG
+
 cd multimonNG
-mkdir build
-cd build
-qmake ../multimon-ng.pro
-make
-sudo make install
+
+cmake -S . -B build
+cmake --build build --parallel 4
+sudo cmake --install build
+
 ########## Verify ##########
-ls /usr/local/bin/multimon-ng
+multimon-ng --help
 """,True,'POCSAG'))
 
 # Xastir
@@ -2319,7 +2414,7 @@ programs_ubuntu24_04.append(('trackerjacker (2.49 MB)',
 sudo sed -i 's/tostring/tobytes/g' /usr/local/lib/python3.10/dist-packages/scapy/arch/linux.py
 python3 -m pip install trackerjacker --break-system-packages
 ########## Verify ##########
-sudo trackerjacker --help
+trackerjacker --help
 """,True,'802.11'))
 
 # airgeddon
@@ -2444,21 +2539,26 @@ pyfdax -h
 
 # Bootable USB
 programs_ubuntu24_04.append(('Bootable USB (90.13 MB)',
-"""
-output = subprocess.check_output("cat /sys/class/dmi/id/product_name", shell=True).decode().lower()
-if echo "$output" | grep -qi "none"; then
-    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 382003C2C8B7B4AB813E915B14E4942973C62A1B
-    sudo add-apt-repository -y "deb http://ppa.launchpad.net/nemh/systemback/ubuntu xenial main"
-    sudo apt update
-    sudo apt install -y systemback
+"""if systemd-detect-virt --quiet; then
+    echo "Running in a VM, not installing"
+else
+    sudo apt-get update
+    sudo apt-get install -y software-properties-common
+
+    sudo add-apt-repository -y universe
     sudo add-apt-repository -y ppa:mkusb/ppa
+
     sudo apt-get update
     sudo apt-get install -y mkusb usb-pack-efi mkusb-plug guidus
-else
-    echo "Running in a VM, not installing"
 fi
+
 ########## Verify ##########
-ls /usr/bin/systemback && ls /usr/bin/guidus
+if systemd-detect-virt --quiet; then
+    echo "VM detected, Bootable USB tools intentionally skipped"
+else
+    command -v mkusb >/dev/null && \
+    command -v guidus >/dev/null
+fi
 """,True,'Development'))
 
 # Dire Wolf
@@ -2492,16 +2592,17 @@ programs_ubuntu24_04.append(('nwdiag (29.18 MB)',
 packetdiag -h
 """,True,'Data'))
 
-# HamClock
-programs_ubuntu24_04.append(('HamClock (44.26 MB)',
+# OpenHamClock
+programs_ubuntu24_04.append(('OpenHamClock',
 """mkdir -p ~/Installed_by_FISSURE
 cd ~/Installed_by_FISSURE
-wget https://www.clearskyinstitute.com/ham/HamClock/ESPHamClock.zip
-unzip -q ESPHamClock.zip
-rm ESPHamClock.zip
-cd ESPHamClock
-make install hamclock-1600x960
-sudo make install hamclock-1600x960
+rm -rf hamclock
+if timeout 120 git clone --depth 1 https://github.com/openhamclock/hamclock.git; then
+    cd hamclock/ESPHamClock
+    make hamclock-1600x960 && sudo make install
+else
+    echo "OpenHamClock download failed or timed out."
+fi
 ########## Verify ##########
 ls /usr/local/bin/hamclock
 """,True,'Ham Radio'))
@@ -2658,7 +2759,7 @@ find . -name '*.grc' -exec grcc {} \;
 programs_ubuntu24_04.append(('pyais (624.00 kB)',
 """python3 -m pip install pyais --break-system-packages
 ########## Verify ##########
-ls /usr/local/lib/python3*/dist-packages/pyais
+python3 -c "import pyais; print(pyais.__file__)"
 """,True,'AIS'))
 
 # HAMRS

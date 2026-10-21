@@ -319,6 +319,22 @@ def refreshCustomWidgets(dashboard: QtWidgets.QMainWindow):
     except Exception as e:
         pass
 
+    try:
+        TSITabSlots.restyle_sa_inspection_canvases(dashboard)
+    except Exception:
+        pass
+
+    try:
+        TSITabSlots.restyle_sa_pd_demodulation_canvases(dashboard)
+    except Exception:
+        pass
+
+    try:
+        TSITabSlots.restyle_sa_pd_bf_canvases(dashboard)
+    except Exception:
+        pass
+
+
 @QtCore.pyqtSlot()
 def _slotMenuHelpUserManualClicked():
     """ Opens the local user manual in a browser."""
@@ -326,26 +342,33 @@ def _slotMenuHelpUserManualClicked():
 
 
 def _slotMenuOptionsClicked(dashboard: QtWidgets.QMainWindow):
-    """Opens the Options dialog for the current tab."""
-    dlg = fissure.Dashboard.UI_Components.Qt5.OptionsDialog(
-        dashboard,
-        opening_tab=dashboard.ui.tabWidget.tabText(dashboard.ui.tabWidget.currentIndex()),
-        settings_dictionary=dashboard.backend.settings,
-    )
-    dlg.show()
-    dlg.exec_()
+        """Opens the Options dialog for the current workbench."""
+        current_tab = dashboard.ui.tabWidget.currentWidget()
 
-    # OK Clicked  # Update how options get saved/read
-    # get_value = dlg.return_value  # No longer needed, async messages sent on accept()
-    # if len(get_value) > 0:
-        # dashboard.backend.settings = dlg.settings_dictionary
+        if current_tab is dashboard.ui.tab_tsi:
+            current_signal_tab = dashboard.ui.tabWidget_signal_analysis.currentWidget()
+            if current_signal_tab is dashboard.ui.tab_iq_data:
+                opening_tab = "IQ Data"
+            elif current_signal_tab is dashboard.ui.tabWidget_protocol.parentWidget():
+                opening_tab = "PD"
+            else:
+                opening_tab = "TSI"
+        elif current_tab is dashboard.ui.tab_attack:
+            opening_tab = "Attack"
+        elif current_tab is dashboard.ui.tab_library:
+            if dashboard.ui.tabWidget_library.currentWidget() is dashboard.ui.tabWidget_archive.parentWidget():
+                opening_tab = "Archive"
+            else:
+                opening_tab = "Library"
+        else:
+            opening_tab = dashboard.ui.tabWidget.tabText(dashboard.ui.tabWidget.currentIndex())
 
-        # # Update Settings Across Components
-        # msg = {
-        # MessageFields.IDENTIFIER: Identifiers.DASHBOARD,
-        # MessageFields.MESSAGE_NAME: "Update FISSURE Settings"
-        # }
-        # self.hiprfisr_socket.send_msg(MessageTypes.COMMANDS, **msg)
+        dlg = fissure.Dashboard.UI_Components.Qt5.OptionsDialog(
+            dashboard,
+            opening_tab=opening_tab,
+            settings_dictionary=dashboard.backend.settings,
+        )
+        dlg.show()
 
 
 @QtCore.pyqtSlot()
@@ -489,15 +512,31 @@ def _slotMenuKismetClicked(dashboard: QtWidgets.QMainWindow):
 
 @QtCore.pyqtSlot()
 def _slotMenuQSpectrumAnalyzerClicked(dashboard: QtWidgets.QMainWindow):
-    """Opens QSpectrumAnalyzer for viewing RF signals."""
-    # Issue the Command
-    expect_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "expect_script")
-    if fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "gnome-terminal":
-        proc = subprocess.Popen("gnome-terminal -- " + expect_script_filepath + ' "qspectrumanalyzer"', shell=True)
-    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "qterminal":
-        proc = subprocess.Popen("qterminal -e " + expect_script_filepath + ' "qspectrumanalyzer"', shell=True)
-    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "lxterminal":
-        proc = subprocess.Popen('lxterminal -e ' + expect_script_filepath + ' "qspectrumanalyzer"', shell=True)
+    """Open QSpectrumAnalyzer for viewing RF signals."""
+    expect_script_filepath = os.path.join(
+        fissure.utils.TOOLS_DIR,
+        "expect_script",
+    )
+    terminal = fissure.utils.get_default_expect_terminal(
+        dashboard.backend.os_info
+    )
+    command = "env QT_PREFERRED_BINDING=PyQt5 qspectrumanalyzer"
+
+    if terminal == "gnome-terminal":
+        subprocess.Popen(
+            f'gnome-terminal -- {expect_script_filepath} "{command}"',
+            shell=True,
+        )
+    elif terminal == "qterminal":
+        subprocess.Popen(
+            f'qterminal -e {expect_script_filepath} "{command}"',
+            shell=True,
+        )
+    elif terminal == "lxterminal":
+        subprocess.Popen(
+            f'lxterminal -e {expect_script_filepath} "{command}"',
+            shell=True,
+        )
 
 
 @QtCore.pyqtSlot()
@@ -5413,38 +5452,6 @@ async def _slotMenuDemoAttackAllClicked(dashboard: QtWidgets.QMainWindow):
 
 
 @qasync.asyncSlot(QtCore.QObject)
-async def _slotMenuDemoAttackSingleStageTabClicked(dashboard: QtWidgets.QMainWindow):
-    """
-    Executes the demo script and logs its progress.
-    """
-    pass
-
-
-@qasync.asyncSlot(QtCore.QObject)
-async def _slotMenuDemoAttackMultiStageTabClicked(dashboard: QtWidgets.QMainWindow):
-    """
-    Executes the demo script and logs its progress.
-    """
-    pass
-
-
-@qasync.asyncSlot(QtCore.QObject)
-async def _slotMenuDemoAttackFuzzingTabClicked(dashboard: QtWidgets.QMainWindow):
-    """
-    Executes the demo script and logs its progress.
-    """
-    pass
-
-
-@qasync.asyncSlot(QtCore.QObject)
-async def _slotMenuDemoAttackHistoryTabClicked(dashboard: QtWidgets.QMainWindow):
-    """
-    Executes the demo script and logs its progress.
-    """
-    pass
-
-
-@qasync.asyncSlot(QtCore.QObject)
 async def _slotMenuDemoAttackPacketCrafterTabClicked(dashboard: QtWidgets.QMainWindow):
     """
     Executes the demo script and logs its progress.
@@ -5916,6 +5923,51 @@ def _slotMenuTAK_StopDockerContainersClicked(dashboard: QtWidgets.QMainWindow):
         proc = subprocess.Popen('lxterminal -e ' + expect_script_filepath + ' "' + docker_stop_command + '"', shell=True)
 
 
+@qasync.asyncSlot(QtCore.QObject)
+async def _slotMenuNewCoTLogSessionClicked(dashboard: QtWidgets.QMainWindow):
+    """Starts a fresh CoT logging session on HIPRFISR."""
+    if dashboard.backend.hiprfisr_connected is not True:
+        dashboard.statusBar().showMessage(
+            "Cannot start a new CoT log session: HIPRFISR is not connected.",
+            10000,
+        )
+        return
+
+    await dashboard.backend.newCoTLogSession()
+
+
+@QtCore.pyqtSlot()
+def _slotMenuReplayCoTToTAKClicked(dashboard: QtWidgets.QMainWindow):
+    """
+    Opens a terminal with the CoT replay command populated for TAK.
+    """
+    expect_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "expect_script")
+    replay_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "replay_cot_log.py")
+    replay_command = "python3 " + replay_script_filepath
+    if fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "gnome-terminal":
+        proc = subprocess.Popen("gnome-terminal -- " + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "qterminal":
+        proc = subprocess.Popen("qterminal -e " + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "lxterminal":
+        proc = subprocess.Popen('lxterminal -e ' + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+
+
+@QtCore.pyqtSlot()
+def _slotMenuReplayCoTToTAKDashboardClicked(dashboard: QtWidgets.QMainWindow):
+    """
+    Opens a terminal with the CoT replay command populated for TAK and Dashboard replay.
+    """
+    expect_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "expect_script")
+    replay_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "replay_cot_log.py")
+    replay_command = "python3 " + replay_script_filepath + " --dashboard"
+    if fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "gnome-terminal":
+        proc = subprocess.Popen("gnome-terminal -- " + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "qterminal":
+        proc = subprocess.Popen("qterminal -e " + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "lxterminal":
+        proc = subprocess.Popen('lxterminal -e ' + expect_script_filepath + ' "' + replay_command + '"', shell=True)
+
+
 @QtCore.pyqtSlot()
 def _slotMenuJohnTheRipperClicked(dashboard: QtWidgets.QMainWindow):
     """
@@ -5961,4 +6013,101 @@ def _slotMenuMobileAtlasCreatorClicked(dashboard: QtWidgets.QMainWindow):
         proc = subprocess.Popen('lxterminal -e ' + expect_script_filepath + ' "' + mobac_command + '"', shell=True)
 
 
+@QtCore.pyqtSlot()
+def _slotMenuVideoStreamReceiverClicked(
+    dashboard: QtWidgets.QMainWindow,
+    source_ip=None,
+):
+    """Opens a terminal and receives an RTSP video stream."""
+    if source_ip is None:
+        source_ip = getattr(
+            dashboard,
+            "selected_node_ip",
+            "",
+        )
 
+    source_ip = str(
+        source_ip or ""
+    ).strip()
+
+    if source_ip in ("", "ipc", "localhost"):
+        source_ip = "127.0.0.1"
+
+    expect_script_filepath = os.path.join(
+        fissure.utils.TOOLS_DIR,
+        "expect_script",
+    )
+
+    video_command = (
+        "gst-launch-1.0 -v "
+        f"playbin uri=rtsp://{source_ip}:8554/fissure"
+    )
+
+    if fissure.utils.get_default_expect_terminal(
+        dashboard.backend.os_info
+    ) == "gnome-terminal":
+        proc = subprocess.Popen(
+            "gnome-terminal -- "
+            + expect_script_filepath
+            + ' "'
+            + video_command
+            + '"',
+            shell=True,
+        )
+    elif fissure.utils.get_default_expect_terminal(
+        dashboard.backend.os_info
+    ) == "qterminal":
+        proc = subprocess.Popen(
+            "qterminal -e "
+            + expect_script_filepath
+            + ' "'
+            + video_command
+            + '"',
+            shell=True,
+        )
+    elif fissure.utils.get_default_expect_terminal(
+        dashboard.backend.os_info
+    ) == "lxterminal":
+        proc = subprocess.Popen(
+            "lxterminal -e "
+            + expect_script_filepath
+            + ' "'
+            + video_command
+            + '"',
+            shell=True,
+        )
+
+
+@QtCore.pyqtSlot()
+def _slotMenuAudioStreamReceiverClicked(dashboard: QtWidgets.QMainWindow):
+    """Opens a terminal and receives the FISSURE audio stream."""
+    # Issue the Command
+    expect_script_filepath = os.path.join(fissure.utils.TOOLS_DIR, "expect_script")
+    audio_command = (
+        "gst-launch-1.0 -v "
+        "udpsrc port=5502 "
+        "caps='application/x-rtp,media=audio,encoding-name=OPUS,"
+        "payload=96,clock-rate=48000,encoding-params=2' ! "
+        "rtpjitterbuffer latency=50 ! "
+        "rtpopusdepay ! "
+        "opusdec ! "
+        "audioconvert ! "
+        "audioresample ! "
+        "autoaudiosink"
+    )
+
+    if fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "gnome-terminal":
+        proc = subprocess.Popen(
+            "gnome-terminal -- " + expect_script_filepath + ' "' + audio_command + '"',
+            shell=True,
+        )
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "qterminal":
+        proc = subprocess.Popen(
+            "qterminal -e " + expect_script_filepath + ' "' + audio_command + '"',
+            shell=True,
+        )
+    elif fissure.utils.get_default_expect_terminal(dashboard.backend.os_info) == "lxterminal":
+        proc = subprocess.Popen(
+            "lxterminal -e " + expect_script_filepath + ' "' + audio_command + '"',
+            shell=True,
+        )

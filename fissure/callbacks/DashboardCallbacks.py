@@ -1,7 +1,6 @@
-import binascii
 import fissure.comms
 import time
-from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
 import yaml
 import os
@@ -11,26 +10,26 @@ import asyncio
 from typing import List
 import json
 import qasync
-import datetime
-import zipfile
-import numpy as np
 from fissure.Dashboard.Slots import TacticalTabSlots
 
-from fissure.utils.plugin import get_fissure_plugin_editor_plugins_path
 from fissure.Dashboard.UI_Components.Qt5 import MyMessageBox
-# from ..Dashboard.Slots import StatusBarSlots  # how do you go from callbacks to slots?
 from fissure.Dashboard.Slots import (
     ArchiveTabSlots,
-    AttackTabSlots,
     DashboardSlots,
+    FuzzingTabSlots,
     IQDataTabSlots,
     LibraryTabSlots,
+    ListeningPostsTabSlots,
     LogTabSlots,
     MenuBarSlots,
     PDTabSlots,
+    ScapyTabSlots,
     SensorNodesTabSlots,
     SensorNodesPluginsTabSlots,
+    SequentialActionTabSlots,
+    SingleActionTabSlots,
     StatusBarSlots,
+    TargetsTabSlots,    
     TopBarSlots,
     TSITabSlots,
 )
@@ -54,105 +53,28 @@ from fissure.utils.selected_node_utils import set_selected_node_connection_state
 
 
 async def flowGraphFinished(component: object, category=""):
-    """
-    Update the Dashboard in response to a flow graph finished message.
-    """
-    # Perform Action
+    """Update the Dashboard in response to a legacy flow graph finished message."""
     if category == "PD":
         if component.frontend.ui.pushButton_pd_flow_graphs_start_stop.text() == "Stop":
-            # Toggle the Text
             component.frontend.ui.pushButton_pd_flow_graphs_start_stop.setText("Start")
-
-            # Disable Apply Button
             component.frontend.ui.pushButton_pd_flow_graphs_apply_changes.setEnabled(False)
-
-            # Update Flow Graph Status Labels
             component.frontend.ui.label2_pd_flow_graphs_status.setText("Stopped")
             component.frontend.ui.label2_pd_status_flow_graph_status.setText("Stopped")
-
-            # Update the Status Dialog               
-            # component.frontend.statusbar_text[sensor_node_id][2] = "Not Running"
             component.frontend.refreshStatusBarText()
-
-    elif category == "Attack":
-        # Single-Stage
-        if component.frontend.ui.pushButton_attack_start_stop.text() == "Stop Attack":
-            # Toggle the Text
-            component.frontend.ui.pushButton_attack_start_stop.setText("Start Attack")
-
-            # Disable Apply Button
-            component.frontend.ui.pushButton_attack_apply_changes.setEnabled(False)
-
-            # Update Flow Graph Status Label
-            component.frontend.ui.label2_attack_flow_graph_status.setText("Stopped")
-
-            # Enable Attack Switching
-            component.frontend.ui.comboBox_attack_protocols.setEnabled(True)
-            component.frontend.ui.comboBox_attack_modulation.setEnabled(True)
-            component.frontend.ui.comboBox_attack_hardware.setEnabled(True)
-
-            # Enabled All Values for Editing
-            for get_row in range(component.frontend.ui.tableWidget1_attack_flow_graph_current_values.rowCount()):
-                get_value_item = component.frontend.ui.tableWidget1_attack_flow_graph_current_values.takeItem(get_row,0)
-                get_value_item.setFlags(get_value_item.flags() | QtCore.Qt.ItemIsEditable)
-                get_value_item.setFlags(get_value_item.flags() | QtCore.Qt.ItemIsEnabled)
-                component.frontend.ui.tableWidget1_attack_flow_graph_current_values.setItem(get_row,0,get_value_item)
-
-        # Fuzzing
-        if component.frontend.ui.pushButton_attack_fuzzing_start.text() == "Stop Attack":
-            # Toggle the Text
-            component.frontend.ui.pushButton_attack_fuzzing_start.setText("Start Attack")  ######
-
-            # Disable Apply Button
-            component.frontend.ui.pushButton_attack_fuzzing_apply_changes.setEnabled(False) #######
-
-            # Update Flow Graph Status Label
-            component.frontend.ui.label2_attack_fuzzing_flow_graph_status.setText("Stopped") ######
-
-            # Enabled All Values for Editing
-            for get_row in range(component.frontend.ui.tableWidget_attack_fuzzing_flow_graph_current_values.rowCount()):
-                get_value_item = component.frontend.ui.tableWidget_attack_fuzzing_flow_graph_current_values.takeItem(get_row,0)
-                get_value_item.setFlags(get_value_item.flags() | QtCore.Qt.ItemIsEditable)
-                get_value_item.setFlags(get_value_item.flags() | QtCore.Qt.ItemIsEnabled)
-                component.frontend.ui.tableWidget_attack_fuzzing_flow_graph_current_values.setItem(get_row,0,get_value_item)
-
-        # Update the Status Dialog
-        # component.frontend.statusbar_text[sensor_node_id][3] = "Not Running"
-        component.frontend.refreshStatusBarText()
 
 
 async def flowGraphStarted(component: object, category=""):
-    """
-    Enable the stop buttons and change the status messages to indicate the flow graph is running.
-    """
-    # Perform Action
+    """Update Dashboard controls when a legacy flow graph reports that it started."""
     if category == "PD":
-        # Update Flow Graph Status Labels
         component.frontend.ui.label2_pd_flow_graphs_status.setText("Running... ")
         component.frontend.ui.pushButton_pd_flow_graphs_start_stop.setEnabled(True)
         component.frontend.ui.label2_pd_status_flow_graph_status.setText("Running... ")
 
-        # Update the Status Dialog
         if component.frontend.active_sensor_node > -1:
-            component.frontend.statusbar_text[component.frontend.active_sensor_node][2] = 'Running Flow Graph... ' + str(component.frontend.ui.textEdit_pd_flow_graphs_filepath.toPlainText()).rsplit("/",1)[1]
-            component.frontend.refreshStatusBarText()
-
-    elif category == "Attack":
-        # Single-Stage
-        if component.frontend.ui.tabWidget_attack_attack.currentIndex() == 0:
-            # Update Flow Graph Status Label
-            component.frontend.ui.label2_attack_flow_graph_status.setText("Running...")
-            component.frontend.ui.pushButton_attack_start_stop.setEnabled(True)
-
-        # Fuzzing
-        elif component.frontend.ui.tabWidget_attack_attack.currentIndex() == 2:
-            # Update Flow Graph Status Label
-            component.frontend.ui.label2_attack_fuzzing_flow_graph_status.setText("Running...")
-            component.frontend.ui.pushButton_attack_fuzzing_start.setEnabled(True)
-
-        # Update the Status Dialog
-        if component.frontend.active_sensor_node > -1:
-            component.frontend.statusbar_text[component.frontend.active_sensor_node][3] = 'Running Flow Graph...'
+            filepath = str(component.frontend.ui.textEdit_pd_flow_graphs_filepath.toPlainText())
+            component.frontend.statusbar_text[component.frontend.active_sensor_node][2] = (
+                "Running Flow Graph... " + filepath.rsplit("/", 1)[-1]
+            )
             component.frontend.refreshStatusBarText()
 
 
@@ -273,6 +195,13 @@ async def recallSettingsReturn(component: object, node_uuid: str, node_ip_addres
         component.logger.debug(
             f"Could not update TSI Feature Extractor selected-node gate "
             f"after recallSettingsReturn: {e}"
+        )
+
+    try:
+        TSITabSlots.update_sa_classifier_selected_node_gate(component.frontend)
+    except Exception as e:
+        component.logger.debug(
+            f"Could not update Classifier selected-node gate after recallSettingsReturn: {e}"
         )
     
     try:
@@ -445,34 +374,8 @@ async def flowGraphFinishedSniffer(component: object, category=""):
     component.frontend.ui.pushButton_pd_sniffer_msg_pdu.setEnabled(True)
 
 
-async def multiStageAttackFinished(component: object):
-    """ 
-    Changes the pushbuttons and labels upon receiving a message from the Sensor Node.
-    """       
-    # Change the Pushbuttons and Labels
-    component.frontend.ui.pushButton_attack_multi_stage_start.setText("Start")
-    component.frontend.ui.label2_attack_multi_stage_status.setText("Not Running")
-
-    # Update the Status Dialog
-    if component.frontend.active_sensor_node > -1:
-        component.frontend.statusbar_text[component.frontend.active_sensor_node][3] = "Not Running"
-        component.frontend.refreshStatusBarText()
-
-    # Enable Load/Save
-    component.frontend.ui.pushButton_attack_multi_stage_load.setEnabled(True)
-    component.frontend.ui.pushButton_attack_multi_stage_save.setEnabled(True)
-
-
 async def flowGraphError(component: object, error=""):
-    """ 
-    Creates a message box with an error message upon flow graph error.
-    """
-    # Enable Items
-    component.frontend.ui.comboBox_attack_protocols.setEnabled(True)
-    component.frontend.ui.comboBox_attack_modulation.setEnabled(True)
-    component.frontend.ui.comboBox_attack_hardware.setEnabled(True)
-
-    # Open Window
+    """Display a legacy flow-graph error returned by a Sensor Node."""
     fissure.Dashboard.UI_Components.Qt5.errorMessage("Flow Graph Error:\n" + error)
 
 
@@ -624,6 +527,21 @@ async def refreshSensorNodeFilesResults(
     component.frontend.ui.tableWidget_sensor_nodes_fn_files.horizontalHeader().setStretchLastSection(True)
     component.frontend.ui.tableWidget_sensor_nodes_fn_files.setColumnWidth(0,800)
     component.frontend.ui.tableWidget_sensor_nodes_fn_files.resizeRowsToContents()
+
+
+async def refreshSensorNodeActivityResults(
+    component: object,
+    node_uid="",
+    operations=None,
+    log_entries=None,
+):
+    """Populate the read-only Sensor Nodes Activity snapshot."""
+    SensorNodesTabSlots.populate_sensor_nodes_activity_snapshot(
+        component.frontend,
+        node_uid=node_uid,
+        operations=operations or [],
+        log_entries=log_entries or [],
+    )
 
 
 async def fileDownloaded(component: object):
@@ -910,14 +828,6 @@ async def libraryUpdateFinished(component: object):
     component.frontend.ui.comboBox_pd_dissectors_protocol.clear()
     component.frontend.ui.comboBox_pd_dissectors_protocol.addItems(sorted(protocols_with_packet_types))
 
-    # Attack Tab Protocols
-    component.frontend.ui.comboBox_attack_protocols.clear()
-    protocols_with_attacks = []
-    for p in protocols:
-        if len(fissure.utils.library.getAttackNames(component.library, p, fissure.utils.get_library_version())) > 0:
-            protocols_with_attacks.append(p)
-    component.frontend.ui.comboBox_attack_protocols.addItems(sorted(protocols_with_attacks))
-
     # Gallery Protocols
     component.frontend.ui.comboBox_library_gallery_protocol.clear()
     protocols_with_images = []
@@ -925,11 +835,6 @@ async def libraryUpdateFinished(component: object):
         if len(component.frontend.findGalleryImages(p)) > 0:
             protocols_with_images.append(p)
     component.frontend.ui.comboBox_library_gallery_protocol.addItems(sorted(protocols_with_images))
-
-    component.frontend.ui.treeWidget_attack_attacks.clear()
-    component.frontend.populateAttackTreeWidget()
-    component.frontend.ui.treeWidget_attack_attacks.expandAll()
-    AttackTabSlots._slotAttackProtocols(component.frontend)
 
     # Refresh Browse Table
     LibraryTabSlots._slotLibraryBrowseChanged(component.frontend)
@@ -969,9 +874,6 @@ async def libraryUpdateFinished(component: object):
     # Update All Flow Graphs in Demodulation Tab
     PDTabSlots._slotPD_DemodHardwareChanged(component.frontend)
 
-    # Create a Dialog Window
-    # fissure.Dashboard.UI_Components.Qt5.errorMessage("Library updated successfully.")
-
 
 async def findEntropyReturn(component: object, ents):
     """ 
@@ -998,60 +900,141 @@ async def retrieveDatabaseCacheReturn(component: object, database_return={}, ref
         await libraryUpdateFinished(component)
 
 
-async def checkSensorNodePluginResults(component: object, plugin_status: dict):
-    """Update Based on Results of Sensor Node Plugin Status Response
-
-    Parameters
-    ----------
-    component : object
-        Dashboard Backend
-    plugin_status : dict
-        Status (values) of plugins (keys)
-    """
-    # if sensor_node_id == component.frontend.active_sensor_node:  #TODO
-    # Update Row Items
-    table: QtWidgets.QTableWidget = component.frontend.ui.pluginsTable
-    items = [table.item(i,0).text() for i in range(table.rowCount())]
-    for plugin_name in plugin_status.keys():
-        status = plugin_status.get(plugin_name)
-        if plugin_name in items:
-            # Plugin Already on Table; Update
-            rowindex = items.index(plugin_name)
-            table.item(rowindex,0).setBackground(QtGui.QBrush(QtGui.QColor('white')))
-            table.item(rowindex,1).setText(str(status.get('deployed')))
-            table.item(rowindex,1).setBackground(QtGui.QBrush(QtGui.QColor('white')))
-            table.item(rowindex,2).setText(str(status.get('installed')))
-            table.item(rowindex,2).setBackground(QtGui.QBrush(QtGui.QColor('white')))
-
-        else:
-            # New Plugin; add to table
-            rowindex = table.rowCount()
-            table.insertRow(rowindex)
-            table.setItem(rowindex, 0, QtWidgets.QTableWidgetItem(plugin_name))
-            table.setItem(rowindex, 1, QtWidgets.QTableWidgetItem(str(status.get('deployed'))))
-            table.setItem(rowindex, 2, QtWidgets.QTableWidgetItem(str(status.get('installed'))))
-
-    # Check for Stale Items
-    for item in items:
-        if not item in plugin_status.keys():
-            # Item is no Longer in the Plugin List; Remove
-            table.removeRow(items.index(item))
+async def queryListeningPostsReturn(
+    component: object,
+    posts=None,
+    error="",
+):
+    """Populate the Targets & Actions Listening Posts workspace."""
+    ListeningPostsTabSlots.populate_listening_posts(
+        component.frontend,
+        posts=posts or [],
+        error=error,
+    )
 
 
-async def requestPluginsTransferInstall(component: object, node_uid: str, plugin_names: str):
-    """Transfer Plugin to Sensor Node by Request of Sensor Node
+async def listeningPostOperationReturn(
+    component: object,
+    action="",
+    post_id="",
+    success=False,
+    message="",
+    posts=None,
+):
+    """Apply one Listening Post create/update/start/stop/delete result."""
+    ListeningPostsTabSlots.handle_listening_post_operation_result(
+        component.frontend,
+        action=action,
+        post_id=post_id,
+        success=success,
+        message=message,
+        posts=posts or [],
+    )
 
-    Parameters
-    ----------
-    component : object
-        Dashboard Backend
-    node_uid : str
-        Sensor node UID
-    plugin_names : str
-        Plugin name with file extension or no extension if folder
-    """
-    await component.transferPlugin(node_uid, plugin_names, True)
-    await SensorNodesPluginsTabSlots._slotSensorNodesPluginsPluginsListRefresh(component.frontend)
+
+async def listeningPostUpdate(
+    component: object,
+    post=None,
+):
+    """Apply one live HIPRFISR Listening Post status/activity update."""
+    ListeningPostsTabSlots.handle_listening_post_update(
+        component.frontend,
+        post=post or {},
+    )
+
+
+async def refreshPluginInventoryResults(
+    component: object,
+    node_uid="",
+    hub_inventory=None,
+    node_inventory=None,
+    error="",
+):
+    """Populate the Sensor Nodes Plugins inventory from one explicit refresh."""
+    SensorNodesPluginsTabSlots.populate_plugin_inventory(
+        component.frontend,
+        node_uid=node_uid,
+        hub_inventory=hub_inventory or {},
+        node_inventory=node_inventory or {},
+        error=error,
+    )
+
+
+async def repairPluginSetupResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    hub_inventory=None,
+    node_inventory=None,
+):
+    """Apply a setup-repair result and refreshed inventory to the Plugins page."""
+    SensorNodesPluginsTabSlots.handle_plugin_setup_result(
+        component.frontend,
+        node_uid=node_uid,
+        plugin_name=plugin_name,
+        success=success,
+        status=status,
+        message=message,
+        output=output,
+        hub_inventory=hub_inventory,
+        node_inventory=node_inventory,
+    )
+
+
+async def deployPluginResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    transfer_id="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    hub_inventory=None,
+    node_inventory=None,
+):
+    """Apply one remote Deploy/Update result to the Plugins page."""
+    SensorNodesPluginsTabSlots.handle_plugin_deploy_result(
+        component.frontend,
+        node_uid=node_uid,
+        plugin_name=plugin_name,
+        transfer_id=transfer_id,
+        success=success,
+        status=status,
+        message=message,
+        output=output,
+        hub_inventory=hub_inventory,
+        node_inventory=node_inventory,
+    )
+
+
+async def removeManagedPluginResults(
+    component: object,
+    node_uid="",
+    plugin_name="",
+    success=False,
+    status="",
+    message="",
+    output="",
+    hub_inventory=None,
+    node_inventory=None,
+):
+    """Apply one managed plugin-removal result to the Plugins page."""
+    SensorNodesPluginsTabSlots.handle_plugin_remove_result(
+        component.frontend,
+        node_uid=node_uid,
+        plugin_name=plugin_name,
+        success=success,
+        status=status,
+        message=message,
+        output=output,
+        hub_inventory=hub_inventory,
+        node_inventory=node_inventory,
+    )
 
 
 # async def responsePluginNamesHiprfisr(component: object, plugin_names: List[str]):
@@ -1075,179 +1058,6 @@ async def requestPluginsTransferInstall(component: object, node_uid: str, plugin
 #     plugin_manager_table.horizontalHeader().setVisible(True)
 #     plugin_manager_table.verticalHeader().setVisible(False)
 
-#     # Also update the combobox in the Plugin Operations tab
-#     combobox: QtWidgets.QComboBox = component.frontend.ui.comboBox_select_plugin
-#     combobox.clear()
-#     combobox.addItems(plugin_names)
-
-
-async def responsePluginOperations(component: object, plugin: str, operations: List[str]) -> None:
-    """Handle Request for Plugin Operations
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin : str
-        Plugin name
-    operations : List[str]
-        List of operations for the plugin
-    """
-    operations.sort()
-    combobox: QtWidgets.QComboBox = component.frontend.ui.comboBox_select_plugin_op
-    combobox.clear()
-    combobox.addItems(operations)
-
-
-async def responsePluginOperationParameters(component: object, plugin: str, operation: str, parameters: dict, resources: dict, interfaces: dict) -> None:
-    """Handle Request for Plugin Operation Parameters
-
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin : str
-        Plugin name
-    operation : str
-        Operation name
-    parameters : dict
-        Parameters for the operation
-    """
-    params_table: QtWidgets.QTableWidget = component.frontend.ui.tableWidget_plugin_op_params
-
-    keys = []
-    for key, value in parameters.items():
-        keys = np.union1d(keys, [str(k) for k in value.keys()])
-
-    if "required" in keys:
-        # Move required to first position if present (second position later)
-        keys = ["required"] + [k for k in keys if k != "required"]
-    else:
-        keys = ["required"] + list(keys)
-
-    if "default" in keys:
-        # Move default to first position if present
-        keys = ["default"] + [k for k in keys if k != "default"]
-    else:
-        keys = ["default"] + list(keys)
-
-    # Move "description" to the end of the keys list if present
-    if "description" in keys:
-        keys = [k for k in keys if k != "description"] + ["description"]
-
-    # Record position for each key
-    key_positions = {key: (i+1) for i, key in enumerate(keys)}
-
-    # Make the first letter for each key uppercase
-    keys = [key.capitalize() for key in keys]
-
-    # Prepare the column names for the table
-    columns = ["Value"] + keys
-
-    # configure table
-    params_table.clearContents()
-    params_table.setColumnCount(len(columns))
-    params_table.setHorizontalHeaderLabels(columns)
-    params_table.horizontalHeader().setVisible(True)
-    params_table.verticalHeader().setVisible(True)
-    params_table.setSortingEnabled(True)
-
-    # Populate the table with parameters
-    params_table.setRowCount(0)  # Clear existing rows
-    for row_index, (key, value) in enumerate(parameters.items()):
-        row_index = params_table.rowCount()
-        params_table.insertRow(row_index)
-        params_table.setVerticalHeaderItem(row_index, QtWidgets.QTableWidgetItem(key))
-        for subkey, subvalue in value.items():
-            col_index = key_positions.get(subkey, 0)
-            item = QtWidgets.QTableWidgetItem(str(subvalue))
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)  # Make item non-editable
-            params_table.setItem(row_index, col_index, item)
-   
-    # Resize the table to fit contents
-    params_table.resizeColumnsToContents()
-    params_table.resizeRowsToContents()
-    
-    # Get keys for resources
-    keys = []
-    for key, value in resources.items():
-        keys = np.union1d(keys, [str(k) for k in value.keys()])
-
-    # Move "description" to the end of the keys list if present
-    if "description" in keys:
-        keys = [k for k in keys if k != "description"] + ["description"]
-
-    # Record position for each key
-    key_positions = {key: i for i, key in enumerate(keys)}
-
-    # Make the first letter for each key uppercase
-    keys = [key.capitalize() for key in keys]
-
-    # Configure resources table
-    res_table: QtWidgets.QTableWidget = component.frontend.ui.tableWidget_plugin_op_resources
-    res_table.clearContents()
-    res_table.setColumnCount(len(keys))
-    res_table.setHorizontalHeaderLabels(keys)
-    res_table.horizontalHeader().setVisible(True)
-    res_table.verticalHeader().setVisible(True)
-    res_table.setSortingEnabled(True)
-
-    # Populate the resources table
-    res_table.setRowCount(0)  # Clear existing rows
-    for row_index, (key, value) in enumerate(resources.items()):
-        row_index = res_table.rowCount()
-        res_table.insertRow(row_index)
-        res_table.setVerticalHeaderItem(row_index, QtWidgets.QTableWidgetItem(key))
-        for subkey, subvalue in value.items():
-            col_index = key_positions.get(subkey, 0)
-            item = QtWidgets.QTableWidgetItem(str(subvalue))
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)  # Make item non-editable
-            res_table.setItem(row_index, col_index, item)
-    
-    # Resize the resources table to fit contents
-    res_table.resizeColumnsToContents()
-    res_table.resizeRowsToContents()
-
-    # Get keys for interfaces
-    keys = []
-    for key, value in interfaces.items():
-        keys = np.union1d(keys, [str(k) for k in value.keys()])
-
-    # Move "description" to the end of the keys list if present
-    if "description" in keys:
-        keys = [k for k in keys if k != "description"] + ["description"]
-
-    # Record position for each key
-    key_positions = {key: i for i, key in enumerate(keys)}
-
-    # Make the first letter for each key uppercase
-    keys = [key.capitalize() for key in keys]
-
-    # Configure interfaces table
-    iface_table: QtWidgets.QTableWidget = component.frontend.ui.tableWidget_plugin_op_interfaces
-    iface_table.clearContents()
-    iface_table.setColumnCount(len(keys))
-    iface_table.setHorizontalHeaderLabels(keys)
-    iface_table.horizontalHeader().setVisible(True)
-    iface_table.verticalHeader().setVisible(True)
-    iface_table.setSortingEnabled(True)
-
-    # Populate the interfaces table
-    iface_table.setRowCount(0)  # Clear existing rows
-    for row_index, (key, value) in enumerate(interfaces.items()):
-        row_index = iface_table.rowCount()
-        iface_table.insertRow(row_index)
-        iface_table.setVerticalHeaderItem(row_index, QtWidgets.QTableWidgetItem(key))
-        for subkey, subvalue in value.items():
-            col_index = key_positions.get(subkey, 0)
-            item = QtWidgets.QTableWidgetItem(str(subvalue))
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)  # Make item non-editable
-            iface_table.setItem(row_index, col_index, item)
-
-    # Resize the resources table to fit contents
-    res_table.resizeColumnsToContents()
-    res_table.resizeRowsToContents()
-
 
 async def responsePluginOperationStarted(
     component: object,
@@ -1258,17 +1068,6 @@ async def responsePluginOperationStarted(
     parameters: dict,
 ) -> None:
     """Handle Request for Plugin Operation Started."""
-    operations_list: QtWidgets.QListWidget = (
-        component.frontend.ui.listWidget_operations
-    )
-
-    operations_list.addItem(
-        f"{plugin} - {operation} (ID: {operation_id})"
-    )
-    operations_list.setWrapping(
-        True
-    )
-    operations_list.scrollToBottom()
 
     try:
         operation_name = str(
@@ -1399,22 +1198,6 @@ async def responsePluginOperationStopped(
     operation : str
         Operation name
     """
-    operations_list: QtWidgets.QListWidget = (
-        component.frontend.ui.listWidget_operations
-    )
-
-    items = operations_list.findItems(
-        f"{plugin} - {operation} (ID: {operation_id})",
-        QtCore.Qt.MatchExactly,
-    )
-
-    for item in items:
-        operations_list.takeItem(
-            operations_list.row(
-                item
-            )
-        )
-
     # IQ Playback lifecycle only.
     operation_name = str(
         operation or ""
@@ -1495,403 +1278,18 @@ async def responsePluginOperationStopped(
     )
 
 
-async def savePlugin(component: object, plugin_name: str, plugin_data: str) -> None:
-    """Save Plugin Data to File
+async def newCoTLogSessionReturn(component: object, success=False, session_dir="", error=""):
+    """Report the result of starting a new CoT logging session."""
+    if success:
+        session_name = os.path.basename(str(session_dir).rstrip(os.sep))
+        message = f"New CoT log session started: {session_name}"
+        component.logger.info(message)
+        component.frontend.statusBar().showMessage(message, 10000)
+        return
 
-    Parameters
-    ----------
-    component : object
-        Component
-    plugin_name : str
-        Name of the plugin
-    plugin_data : str
-        Plugin data to save
-    """
-    # get the local plugin path from the UI or default to Downloads
-    local_plugin_path = await get_fissure_plugin_editor_plugins_path()
-    if not local_plugin_path:
-        local_plugin_path = os.path.join(os.path.expanduser("~"), "Downloads")
-
-    # Decode hex data
-    plugin_data = binascii.a2b_hex(plugin_data)
-
-    # Save file
-    pathname = os.path.join(local_plugin_path, plugin_name + '.zip')
-    with open(pathname, "wb") as f:
-        f.write(plugin_data)
-
-    # Create a path for the plugin to be extracted to
-    extract_path = os.path.join(local_plugin_path, plugin_name)
-    if os.path.exists(extract_path):
-        copy_num = 1
-        base_name = plugin_name
-        while os.path.exists(extract_path):
-            extract_path = os.path.join(local_plugin_path, f"{base_name} (Copy {copy_num})")
-            copy_num += 1
-    os.makedirs(extract_path, exist_ok=True)
-
-    # Extract the zip file to the plugin directory
-    with zipfile.ZipFile(pathname, "r") as zip_ref:
-        zip_ref.extractall(extract_path)
-
-    # Remove the zip file
-    os.remove(pathname)
-
-    # Refresh the local plugin list in the UI
-    component.frontend.ui.toolButton_plugin_pkg_path_refresh.clicked.emit()
-
-
-# async def responsePluginTableData(component: object, plugin_name: str, table_data_json: dict, install_files: List[str]):
-#     """Populates table data after opening a plugin.
-
-#     Parameters
-#     ----------
-#     component : object
-#         Component
-#     """
-#     # Populate CSV Tables
-#     table_data = json.loads(table_data_json)  # Convert JSON back to dictionary
-
-#     for table_name, rows in table_data.items():
-#         # Match Table to ComboBox Item
-#         current_combobox_index = component.frontend.ui.comboBox_library_plugin_edit.findText(table_name)
-#         if current_combobox_index == -1:
-#             continue
-
-#         # Get Corresponding Table Widget
-#         component.frontend.ui.stackedWidget_library_plugin_tables.setCurrentIndex(current_combobox_index)
-#         current_page = component.frontend.ui.stackedWidget_library_plugin_tables.currentWidget()
-#         target_table = current_page.findChild(QtWidgets.QTableWidget)
-
-#         if target_table:
-#             # Get the headers from the table (expected headers from the database)
-#             expected_headers = [
-#                 target_table.horizontalHeaderItem(col).text() if target_table.horizontalHeaderItem(col) else ""
-#                 for col in range(target_table.columnCount())
-#             ]
-
-#             # Check if the first row matches the expected headers
-#             if rows and len(rows) > 0:
-#                 first_row = rows[0]  # First row of data
-
-#                 if len(first_row) != len(expected_headers):
-#                     # Handle the mismatch in column count
-#                     asyncio.ensure_future(
-#                         fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
-#                             component.frontend,
-#                             f"Column count mismatch in table '{table_name}' between data and table headers."
-#                         )
-#                     )
-#                     continue
-
-#                 # Check if the first row values match the headers
-#                 for col_index in range(len(first_row)):
-#                     if first_row[col_index] != expected_headers[col_index]:
-#                         # Handle the header mismatch
-#                         asyncio.ensure_future(
-#                             fissure.Dashboard.UI_Components.Qt5.async_ok_dialog(
-#                                 component.frontend,
-#                                 f"In table '{table_name}', the value '{first_row[col_index]}' in the first row does not match the expected header '{expected_headers[col_index]}'."
-#                             )
-#                         )
-#                         continue
-
-#             # Insert rows into the table if header matches
-#             for row in rows[1:]:  # Skip the first row (header row)
-#                 target_row = target_table.rowCount()
-#                 target_table.insertRow(target_row)
-#                 for col_index, value in enumerate(row):
-#                     item = QtWidgets.QTableWidgetItem(value)
-#                     item.setTextAlignment(QtCore.Qt.AlignCenter)
-#                     target_table.setItem(target_row, col_index, item)
-
-#     # Populate Support Files Tables
-#     page_mapping = {
-#         "Single-Stage Flow Graphs": component.frontend.ui.tableWidget_library_plugin_attacks_support,
-#         "Fuzzing Flow Graphs": component.frontend.ui.tableWidget_library_plugin_attacks_support,
-#         "PD Flow Graphs": component.frontend.ui.tableWidget_library_plugin_demodulation_flow_graphs_support,
-#         "Inspection Flow Graphs": component.frontend.ui.tableWidget_library_plugin_inspection_flow_graphs_support,
-#         "Triggers": component.frontend.ui.tableWidget_library_plugin_triggers_support,
-#     }
-
-#     for filepath in install_files:
-#         # Determine the table widget based on the keywords in the filepath
-#         target_table = None
-#         for keyword, table_widget in page_mapping.items():
-#             if keyword in filepath:
-#                 target_table = table_widget
-#                 break
-        
-#         if target_table:
-#             # Add a new row to the table
-#             row_position = target_table.rowCount()
-#             target_table.insertRow(row_position)
-            
-#             # Add the filepath as a new item
-#             filepath_item = QtWidgets.QTableWidgetItem(filepath)
-#             filepath_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-#             filepath_item.setFlags(filepath_item.flags() & ~QtCore.Qt.ItemIsEditable)
-#             target_table.setItem(row_position, 0, filepath_item)
-
-#             # Empty New Filepath Item
-#             new_filepath_item = QtWidgets.QTableWidgetItem("")
-#             new_filepath_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-#             # new_filepath_item.setFlags(new_filepath_item.flags() & ~QtCore.Qt.ItemIsEditable)
-#             target_table.setItem(row_position, 2, new_filepath_item)
-
-#             # Action Comboboxes
-#             new_action_combobox = QtWidgets.QComboBox(target_table, objectName='comboBox2_')
-#             new_action_combobox.setFixedSize(73, 23)
-#             target_table.setCellWidget(row_position, 1, new_action_combobox)
-#             new_action_combobox.addItem("Keep")
-#             new_action_combobox.addItem("Replace")
-#             new_action_combobox.addItem("Delete")
-
-#             # Function to handle enabling/disabling columns
-#             def handle_combobox_change(target_table, row_position, index):
-#                 if index == 0 or index == 2:  # Keep or Delete
-#                     for col in [2, 3]:
-#                         cell_widget = target_table.cellWidget(row_position, col)
-#                         if isinstance(cell_widget, QtWidgets.QPushButton):
-#                             cell_widget.setEnabled(False)
-#                         else:
-#                             item = target_table.item(row_position, col)
-#                             if item:
-#                                 item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEnabled)
-#                 elif index == 1:  # Replace
-#                     for col in [2, 3]:
-#                         cell_widget = target_table.cellWidget(row_position, col)
-#                         if isinstance(cell_widget, QtWidgets.QPushButton):
-#                             cell_widget.setEnabled(True)
-#                         else:
-#                             item = target_table.item(row_position, col)
-#                             if item:
-#                                 item.setFlags(item.flags() | QtCore.Qt.ItemIsEnabled)
-
-#                 # Ensure the table updates visually
-#                 target_table.viewport().update()
-
-#             # Create Pushbutton
-#             new_pushbutton = QtWidgets.QPushButton(target_table, objectName='pushButton_')
-#             new_pushbutton.setText("...")
-#             new_pushbutton.setFixedSize(36, 23)
-#             target_table.setCellWidget(row_position, 3, new_pushbutton)
-#             new_pushbutton.clicked.connect(lambda checked, table=target_table, row=row_position: LibraryTabSlots._slotLibraryPluginSupportFileSelectionClicked(component.frontend, table, row))
-
-#             # Activate Combobox Slot
-#             new_action_combobox.currentIndexChanged.connect(
-#                 lambda index, table=target_table, row=row_position: handle_combobox_change(table, row, index)
-#             )
-#             new_action_combobox.setCurrentIndex(0)
-#             handle_combobox_change(target_table, row_position, 0)
-            
-#             # Resize Rows
-#             target_table.resizeRowsToContents()
-#         else:
-#             component.logger.error(f"Supporting Files: No matching table widget for filepath '{filepath}'")
-
-#     # Reset Combobox/Pages
-#     if component.frontend.ui.comboBox_library_plugin_edit.currentIndex() == 0:
-#         LibraryTabSlots._slotLibraryPluginEditChanged(component.frontend)
-#     else:
-#         component.frontend.ui.comboBox_library_plugin_edit.setCurrentIndex(0)  # Function not called when already 0
-
-
-async def responsePluginProtocolParameters(component: object, plugin_name: str, protocol_name: str, parameters: dict):
-    """Handle Request for Plugin Names
-
-    Parameters
-    ----------
-    component : object
-        Component
-    """
-    # UI Widgets
-    doubleSpinBox_protocol_data_rate: QtWidgets.QDoubleSpinBox = component.frontend.ui.doubleSpinBox_protocol_data_rate
-    checkBox_protocol_data_rates: QtWidgets.QCheckBox = component.frontend.ui.checkBox_protocol_data_rates
-    doubleSpinBox_protocol_median_packet_lengths: QtWidgets.QDoubleSpinBox = component.frontend.ui.doubleSpinBox_protocol_median_packet_lengths
-    checkBox_protocol_median_packet_lengths: QtWidgets.QCheckBox = component.frontend.ui.checkBox_protocol_median_packet_lengths
-    listWidget_plugin_protocol_mod_type_list: QtWidgets.QListWidget = component.frontend.ui.listWidget_plugin_protocol_mod_type_list
-    tableWidget_protocol_packet_type: QtWidgets.QTableWidget = component.frontend.ui.tableWidget_protocol_packet_type
-
-    # Update Values
-    data_rates = parameters.get('data_rates')
-    if data_rates is None:
-        doubleSpinBox_protocol_data_rate.setEnabled(False)
-        checkBox_protocol_data_rates.setChecked(True)
-    else:
-        doubleSpinBox_protocol_data_rate.setEnabled(True)
-        doubleSpinBox_protocol_data_rate.setValue(data_rates)
-        checkBox_protocol_data_rates.setChecked(False)
-
-    median_packet_lengths = parameters.get('median_packet_lengths')
-    if median_packet_lengths is None:
-        doubleSpinBox_protocol_median_packet_lengths.setEnabled(False)
-        checkBox_protocol_median_packet_lengths.setChecked(True)
-    else:
-        doubleSpinBox_protocol_median_packet_lengths.setEnabled(True)
-        doubleSpinBox_protocol_median_packet_lengths.setValue(median_packet_lengths)
-        checkBox_protocol_median_packet_lengths.setChecked(False)
-
-    listWidget_plugin_protocol_mod_type_list.clear()
-    listWidget_plugin_protocol_mod_type_list.addItems(parameters.get('mod_types'))
-
-    pkt_types = parameters.get('pkt_types')
-    tableWidget_protocol_packet_type.clearContents()
-    tableWidget_protocol_packet_type.setWordWrap(True)
-    if not pkt_types is None:
-        tableWidget_protocol_packet_type.setRowCount(len(pkt_types))
-        cols = range(len(pkt_types[0]))
-        for (r, row) in enumerate(pkt_types):
-            for c in cols:
-                tableWidget_protocol_packet_type.setItem(r, c, QtWidgets.QTableWidgetItem(row[c]))
-    else:
-        tableWidget_protocol_packet_type.setRowCount(0)
-
-
-async def update_sensor_node_title(component: object, change: int):
-    # get current number
-    current_text = component.frontend.ui.tabWidget.tabBar().tabText(6)
-    if "(" in current_text and ")" in current_text:
-        base_text, count = current_text.rsplit("(", 1)
-        count = count.rstrip(")")
-        try:
-            current_count = int(count)
-        except ValueError:
-            current_count = 0
-    else:
-        base_text = current_text
-        current_count = 0
-
-    new_count = max([0, current_count + change])
-    new_text = f"{base_text.strip()} ({new_count})"
-    component.frontend.ui.tabWidget.tabBar().setTabText(6, new_text)
-
-
-async def alertReturn(component: object, node_uid="", node_nickname="", alert_text=""):
-    """
-    Updates the Sensor Nodes Alert tab with a new alert.
-    """
-    # Get Sensor Node Label
-    short_uid = str(node_uid or "").split("-")[0]
-
-    if node_nickname and short_uid:
-        node_label = f"{node_nickname} {short_uid}"
-    elif node_nickname:
-        node_label = node_nickname
-    elif short_uid:
-        node_label = short_uid
-    else:
-        node_label = "Unknown Node"
-
-    # Generate a timestamp
-    timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    sensor_node_text = f"[{node_label}]"
-    formatted_message = f"{timestamp} {sensor_node_text} {alert_text}"
-
-    # Append the message
-    current_content = component.frontend.ui.textEdit2_sensor_nodes_alerts.toPlainText()
-    updated_content = current_content + "\n" + formatted_message if current_content else formatted_message
-
-    component.frontend.ui.textEdit2_sensor_nodes_alerts.setPlainText(updated_content)
-    component.frontend.ui.textEdit2_sensor_nodes_alerts.verticalScrollBar().setValue(
-        component.frontend.ui.textEdit2_sensor_nodes_alerts.verticalScrollBar().maximum()
-    )
-
-    # Calculate Alert Total
-    current_text = component.frontend.ui.tabWidget_sensor_nodes.tabBar().tabText(2)
-    if "(" in current_text and ")" in current_text:
-        base_text, count = current_text.rsplit("(", 1)
-        count = count.rstrip(")")
-        try:
-            current_count = int(count)
-        except ValueError:
-            current_count = 0
-    else:
-        base_text = current_text
-        current_count = 0
-
-    new_count = current_count + 1
-    new_text = f"{base_text.strip()} ({new_count})"
-
-    # Update Alert Tab with Count
-    component.frontend.ui.tabWidget_sensor_nodes.tabBar().setTabText(2, new_text)
-
-    # Update Sensor Nodes Tab with Count
-    await update_sensor_node_title(component, 1)
-
-
-async def exploitReturn(component: object, node_uid: str, protocol:str, modulation:str, hardware:str, type:str, attack:str, variables:str):
-    """ 
-    Updates the Sensor Nodes Exploit tab with a new alert.
-    """
-    # Append the message
-    row_position = component.frontend.ui.tableWidget_exploits.rowCount()
-    component.frontend.ui.tableWidget_exploits.insertRow(row_position)
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 0, QTableWidgetItem(protocol))
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 1, QTableWidgetItem(modulation))
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 2, QTableWidgetItem(hardware))
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 3, QTableWidgetItem(type))
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 4, QTableWidgetItem(attack))
-    component.frontend.ui.tableWidget_exploits.setItem(row_position, 5, QTableWidgetItem(str(variables)))
-    component.frontend.ui.tableWidget_exploits.resizeColumnsToContents()
-
-    # Calculate Alert Total
-    current_text = component.frontend.ui.tabWidget_sensor_nodes.tabBar().tabText(3)
-    if "(" in current_text and ")" in current_text:
-        base_text, count = current_text.rsplit("(", 1)
-        count = count.rstrip(")")
-        try:
-            current_count = int(count)
-        except ValueError:
-            current_count = 0
-    else:
-        base_text = current_text
-        current_count = 0
-
-    new_count = current_count + 1
-    new_text = f"{base_text.strip()} ({new_count})"
-
-    # Update Alert Tab with Count
-    #component.frontend.ui.tabWidget_sensor_nodes.tabBar().setTabText(2, new_text)
-    
-    # Update Epxloits Tab with Count
-    component.frontend.ui.tabWidget_sensor_nodes.tabBar().setTabText(3, new_text)
-    
-    # Update Sensor Nodes Tab with Count
-    await update_sensor_node_title(component, 1)
-
-
-async def snreport(component: object, node_uid: str, text:str):
-    """
-    Updates the Sensor Nodes Report tab with a new report.
-    """
-    # Append the message
-    tableWidget_reports: QtWidgets.QTableWidget = component.frontend.ui.tableWidget_reports
-    row_position = component.frontend.ui.tableWidget_reports.rowCount()
-    component.frontend.ui.tableWidget_reports.insertRow(row_position)
-    component.frontend.ui.tableWidget_reports.setItem(row_position, 0, QTableWidgetItem('\n'.join(text)))
-    component.frontend.ui.tableWidget_reports.resizeRowsToContents()
-
-    # Calculate Reports Total
-    current_text = component.frontend.ui.tabWidget_sensor_nodes.tabBar().tabText(4)
-    if "(" in current_text and ")" in current_text:
-        base_text, count = current_text.rsplit("(", 1)
-        count = count.rstrip(")")
-        try:
-            current_count = int(count)
-        except ValueError:
-            current_count = 0
-    else:
-        base_text = current_text
-        current_count = 0
-
-    new_count = current_count + 1
-    new_text = f"{base_text.strip()} ({new_count})"
-
-    # update tab title
-    component.frontend.ui.tabWidget_sensor_nodes.tabBar().setTabText(4, new_text)
-
-    await update_sensor_node_title(component, 1)
+    message = str(error or "Could not start a new CoT log session.")
+    component.logger.warning(message)
+    component.frontend.statusBar().showMessage(message, 10000)
 
 
 async def findGPS_CoordinatesResults(component: object, coordinates=""):
@@ -1903,58 +1301,6 @@ async def findGPS_CoordinatesResults(component: object, coordinates=""):
 
     # Enable the Find Button
     component.frontend.popups["NodeConfigureDialog"].pushButton_find.setEnabled(True)
-
-
-async def enableDisableListenerReturn(component: object, listener_name="", status=""):
-    """
-    Sets the new status for the listener with a matching name in the table.
-    """
-    # Access the table widget
-    table = component.frontend.ui.tableWidget_sensor_nodes_listeners
-    name_column_index = 2  # Assuming "Name" is in column 2 (index 2)
-    status_column_index = 0  # Assuming "Status" is in column 0 (index 0)
-
-    # Find the row with the matching name
-    for row in range(table.rowCount()):
-        item = table.item(row, name_column_index)
-        if item and item.text() == listener_name:
-            status_item = QtWidgets.QTableWidgetItem(status)
-            status_item.setTextAlignment(QtCore.Qt.AlignCenter)
-            
-            # Set the status in the "Status" column
-            table.setItem(row, status_column_index, status_item)
-            # print(f"Updated status for '{listener_name}' to '{status}' in row {row}.")
-            break
-    else:
-        component.logger.error(f"No matching listener found for name '{listener_name}'.")
-
-
-async def deleteListenerReturn(component: object, listener_name=""):
-    """
-    Sets the new status for the listener with a matching name in the table.
-    """
-    # Access the table widget
-    table = component.frontend.ui.tableWidget_sensor_nodes_listeners
-    name_column_index = 2  # Assuming "Name" is in column 2 (index 2)
-
-    # Find and remove the row with the matching name
-    for row in range(table.rowCount()):
-        item = table.item(row, name_column_index)
-        if item and item.text() == listener_name:
-            # Remove row, select the next row, if available
-            selected_items = table.selectedItems()
-            selected_row = selected_items[0].row()
-
-            table.removeRow(row)
-
-            new_row_count = table.rowCount()
-            if new_row_count > 0:
-                # Select the next row, or the last row if at the end
-                new_row = min(selected_row, new_row_count - 1)
-                table.selectRow(new_row)
-            break
-    else:
-        component.logger.error(f"No matching listener found in the table for name '{listener_name}'.")
 
 
 async def gpsBeaconEnableDisableIP_Return(component: object, gps_tak_beacon_status: bool):
@@ -2041,6 +1387,34 @@ async def nodeRefreshReturn(component: object, nodes):
     component.frontend.popups["NodeSelectDialog"].refreshNodes(nodes=nodes)
 
 
+async def inspectionReturn(
+    component: object,
+    node_uid: str = "",
+    operation_id: str = "",
+    inspection: dict = None,
+    final: bool = True,
+    timestamp: str = "",
+):
+    """Route one structured Inspection result into the Inspection workspace."""
+    if not isinstance(inspection, dict):
+        component.logger.error("Dashboard inspectionReturn received invalid Inspection data.")
+        return
+
+    try:
+        TSITabSlots.handle_sa_inspection_return(
+            component.frontend,
+            node_uid=node_uid,
+            operation_id=operation_id,
+            inspection=inspection,
+            final=final,
+            timestamp=timestamp,
+        )
+    except Exception as error:
+        component.logger.error(
+            f"Failed to process Inspection result: {error}"
+        )
+
+
 async def detectionReturn(component: object, detection: dict):
     """
     Receive one native FISSURE Detection for Dashboard engineering workflows.
@@ -2065,10 +1439,34 @@ async def detectionReturn(component: object, detection: dict):
             f"Failed to process Archive Replay detector Detection: {exc}"
         )
 
+    try:
+        SingleActionTabSlots.handle_single_action_detection(component.frontend, detection)
+    except Exception as exc:
+        component.logger.error(
+            f"Failed to process Single Action detector Detection: {exc}"
+        )
+
+    try:
+        SequentialActionTabSlots.handle_sequential_actions_detection(component.frontend, detection)
+    except Exception as exc:
+        component.logger.error(
+            f"Failed to process Sequential Actions detector Detection: {exc}"
+        )
+
+    try:
+        TargetsTabSlots.handle_target_geolocation_detection(component.frontend, detection)
+    except Exception as exc:
+        component.logger.error(
+            f"Failed to update Target geolocation observations: {exc}"
+        )        
+
 
 async def dashboardCoT_Message(component: object, raw_xml: str):
     """
-    Receives a copy of the CoT message sent to the TAK server and hands it off for parsing.
+    Receive one CoT message for Tactical parsing.
+
+    Explicitly marked replay messages may also repopulate the Target
+    Geolocation observation cache without entering live action workflows.
     """
     try:
         cot_message = fissure.utils.cot_utils.parse_cot_xml(raw_xml)
@@ -2078,15 +1476,33 @@ async def dashboardCoT_Message(component: object, raw_xml: str):
 
     fissure.utils.cot_utils.handle_tactical_cot_message(component, cot_message)
 
-    try:
-        TSITabSlots.append_tsi_active_detector_detection_from_cot(
-            component.frontend,
-            cot_message,
-        )
-    except Exception as e:
-        component.logger.error(
-            f"Failed to update TSI detector table: {e}"
-        )
+    is_replay = bool(cot_message.get("replay_dashboard"))
+
+    if not is_replay:
+        try:
+            TSITabSlots.append_tsi_active_detector_detection_from_cot(
+                component.frontend,
+                cot_message,
+            )
+        except Exception as e:
+            component.logger.error(
+                f"Failed to update TSI detector table: {e}"
+            )
+
+    if is_replay and cot_message.get("kind") == "detection":
+        try:
+            detection = fissure.utils.cot_utils.cot_to_native_detection_record(cot_message)
+            target_id = str((detection or {}).get("target_id") or "").strip()
+            target = (getattr(component.frontend, "tactical_targets", {}) or {}).get(target_id)
+            if detection and isinstance(target, dict) and target.get("_replay_only"):
+                TargetsTabSlots.handle_target_geolocation_detection(
+                    component.frontend,
+                    detection,
+                )
+        except Exception as e:
+            component.logger.error(
+                f"Failed to update Target geolocation observations from replay: {e}"
+            )
 
 
 async def nodeStateUpdate(component: object, node_uid="", node={}):
@@ -2096,6 +1512,10 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
     Also updates the selected-node top card when the selected node times out
     or reconnects, and mirrors that connection state into an existing
     Tactical node record.
+
+    Heartbeat/status updates do not rebuild selected-node hardware controls.
+    Hardware-dependent controls and gates are refreshed only when the selected
+    node's connection state actually changes.
     """
     if not node_uid:
         return
@@ -2108,6 +1528,18 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
     if not hasattr(frontend, "node_states"):
         frontend.node_states = {}
 
+    previous_node_state = frontend.node_states.get(node_uid, {}) or {}
+    previous_connected = (
+        previous_node_state.get("connected")
+        if isinstance(previous_node_state, dict)
+        else None
+    )
+    connected = bool(node.get("connected", False))
+    connection_state_changed = (
+        previous_connected is None
+        or bool(previous_connected) != connected
+    )
+
     frontend.node_states[node_uid] = node
 
     tactical_nodes = getattr(frontend, "tactical_nodes", None)
@@ -2118,7 +1550,6 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
     )
 
     if isinstance(tactical_node, dict):
-        connected = bool(node.get("connected", False))
         reported_status = str(node.get("status") or "").strip()
 
         tactical_node["connected"] = connected
@@ -2164,8 +1595,21 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
     ) if selected_uid and node_uid_text else False
 
     if selected_node_changed:
-        connected = bool(node.get("connected", False))
 
+        try:
+            SensorNodesTabSlots.update_sensor_nodes_activity_selected_node_gate(frontend)
+        except Exception as e:
+            component.logger.debug(
+                f"Could not update Sensor Nodes Activity from selected-node state: {e}"
+            )
+
+        try:
+            SensorNodesPluginsTabSlots.update_sensor_nodes_plugins_selected_node_gate(frontend)
+        except Exception as e:
+            component.logger.debug(
+                f"Could not update Sensor Nodes Plugins from selected-node state: {e}"
+            )            
+    
         frontend.selected_node_ip = (
             node.get("node_ip_address")
             or node.get("ip")
@@ -2181,57 +1625,68 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
         if hasattr(frontend, "selected_tactical_node_uid"):
             TacticalTabSlots._updateTacticalNodeInfoFrameState(frontend)
 
-        try:
-            frontend.configureSelectedNodeHardware()
-        except Exception as e:
-            component.logger.debug(
-                f"Could not refresh selected-node hardware after node state update: {e}"
-            )
+        if connection_state_changed:
+            try:
+                frontend.configureSelectedNodeHardware()
+            except Exception as e:
+                component.logger.debug(
+                    f"Could not refresh selected-node hardware after connection-state change: {e}"
+                )
 
-        try:
-            TSITabSlots.update_tsi_detector_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                f"Could not update unified TSI Detector selected-node gate after node state update: {e}"
-            )
+            try:
+                TSITabSlots.update_tsi_detector_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update unified TSI Detector selected-node gate "
+                    f"after connection-state change: {e}"
+                )
 
-        try:
-            TSITabSlots.update_tsi_conditioner_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                f"Could not update TSI Conditioner selected-node gate after node state update: {e}"
-            )
-        
-        try:
-            TSITabSlots.update_tsi_fe_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                f"Could not update TSI Feature Extractor selected-node gate "
-                f"after node state update: {e}"
-            )
+            try:
+                TSITabSlots.update_tsi_conditioner_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update TSI Conditioner selected-node gate "
+                    f"after connection-state change: {e}"
+                )
 
-        try:
-            IQDataTabSlots.update_iq_record_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                "Could not update IQ Record selected-node gate "
-            )
-        
-        try:
-            ArchiveTabSlots.update_archive_replay_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                "Could not update Archive Replay selected-node gate "
-                f"after node state update: {e}"
-            )
+            try:
+                TSITabSlots.update_tsi_fe_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update TSI Feature Extractor selected-node gate "
+                    f"after connection-state change: {e}"
+                )
 
-        try:
-            SensorNodesTabSlots.update_sensor_nodes_file_navigation_selected_node_gate(frontend)
-        except Exception as e:
-            component.logger.debug(
-                "Could not update Sensor Nodes File Navigation selected-node gate "
-                f"after node state update: {e}"
-            )
+            try:
+                TSITabSlots.update_sa_classifier_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    f"Could not update Classifier selected-node gate after connection-state change: {e}"
+                )
+
+            try:
+                IQDataTabSlots.update_iq_record_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update IQ Record selected-node gate "
+                    f"after connection-state change: {e}"
+                )
+
+            try:
+                ArchiveTabSlots.update_archive_replay_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update Archive Replay selected-node gate "
+                    f"after connection-state change: {e}"
+                )
+
+            try:
+                SensorNodesTabSlots.update_sensor_nodes_file_navigation_selected_node_gate(frontend)
+            except Exception as e:
+                component.logger.debug(
+                    "Could not update Sensor Nodes File Navigation selected-node gate "
+                    f"after connection-state change: {e}"
+                )
 
     try:
         TSITabSlots.update_tsi_detector_status_from_selected_node(
@@ -2254,7 +1709,29 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
         component.logger.debug(
             f"Could not update TSI Conditioner status: {e}"
         )
-    
+
+    try:
+        TSITabSlots.update_sa_classifier_status_from_selected_node(
+            frontend,
+            node_uid=node_uid,
+            status=node.get("status", ""),
+        )
+    except Exception as e:
+        component.logger.debug(
+            f"Could not update Signal Analysis Classifier status: {e}"
+        )        
+
+    try:
+        TSITabSlots.update_sa_survey_status_from_selected_node(
+            frontend,
+            node_uid=node_uid,
+            status=node.get("status", ""),
+        )
+    except Exception as e:
+        component.logger.debug(
+            f"Could not update Survey status from selected node: {e}"
+        )        
+
     try:
         IQDataTabSlots.update_iq_playback_status_from_selected_node(
             frontend,
@@ -2286,18 +1763,37 @@ async def nodeStateUpdate(component: object, node_uid="", node={}):
         )
 
     try:
-        TSITabSlots.update_tsi_detector_selected_node_gate(frontend)
+        await SingleActionTabSlots.update_single_action_status_from_selected_node(
+            frontend,
+            node_uid=node_uid,
+            status=node.get("status", ""),
+        )
     except Exception as e:
         component.logger.debug(
-            f"Could not update unified TSI Detector selected-node gate: {e}"
+            f"Could not update Single Action status from selected node: {e}"
         )
 
     try:
-        IQDataTabSlots.update_iq_record_selected_node_gate(frontend)
+        await FuzzingTabSlots.update_fuzzing_status_from_selected_node(
+            frontend,
+            node_uid=node_uid,
+            status=node.get("status", ""),
+        )
     except Exception as e:
         component.logger.debug(
-            "Could not update IQ Record selected-node gate "
+            f"Could not update Fuzzing status from selected node: {e}"
         )
+
+    try:
+        await SequentialActionTabSlots.update_sequential_actions_status_from_selected_node(
+            frontend,
+            node_uid=node_uid,
+            status=node.get("status", ""),
+        )
+    except Exception as e:
+        component.logger.debug(
+            f"Could not update Sequential Actions status from selected node: {e}"
+        )        
 
     component.logger.debug(
         f"nodeStateUpdate: {node_uid} "
@@ -2383,6 +1879,8 @@ async def nodeStateRemove(component: object, node_uid=""):
         TacticalTabSlots.clear_tactical_node_artifact_details(frontend)
         TacticalTabSlots.clear_tactical_node_plugin_controls(frontend)
 
+        TacticalTabSlots.update_tactical_node_stream_button_state(frontend)
+
     if hasattr(frontend, "selected_tactical_node_uids"):
         frontend.selected_tactical_node_uids = [
             uid for uid in frontend.selected_tactical_node_uids
@@ -2446,6 +1944,13 @@ async def nodeStateRemove(component: object, node_uid=""):
             component.logger.debug(
                 f"Could not update TSI Feature Extractor gate "
                 f"after selected node removal: {e}"
+            )
+
+        try:
+            TSITabSlots.update_sa_classifier_selected_node_gate(frontend)
+        except Exception as e:
+            component.logger.debug(
+                f"Could not update Classifier gate after selected node removal: {e}"
             )
         
     # Recompute ecosystem selected-node labels/buttons after row removal.
@@ -2729,6 +2234,18 @@ async def sendArtifactsListTakReturn(
             f"{error}"
         )
 
+    try:
+        TSITabSlots.handle_sa_classifier_artifact_metadata(
+            dashboard,
+            node_uid=node_uid,
+            artifacts=normalized_records,
+        )
+    except Exception as error:
+        component.logger.debug(
+            "Could not route Artifact metadata to Classifier: "
+            f"{error}"
+        )        
+
     for artifact_record in normalized_records:
         try:
             IQDataTabSlots.handle_iq_record_artifact_complete(
@@ -2742,6 +2259,50 @@ async def sendArtifactsListTakReturn(
                 "to IQ Record: "
                 f"{error}"
             )
+        
+        try:
+            TSITabSlots.handle_sa_capture_artifact_complete(
+                dashboard,
+                artifact_record,
+            )
+        except Exception as error:
+            component.logger.debug(
+                "Could not route Artifact metadata "
+                "to Signal Analysis Capture: "
+                f"{error}"
+            )
+
+    try:
+        TSITabSlots.handle_sa_inspection_artifact_metadata(
+            dashboard,
+            node_uid=node_uid,
+            artifacts=normalized_records,
+        )
+    except Exception as error:
+        component.logger.debug(
+            "Could not route Artifact metadata "
+            "to Signal Analysis Inspection: "
+            f"{error}"
+        )
+
+    try:
+        from fissure.Dashboard.Slots.TSITabSlots import pd_demodulation
+        pd_demodulation.handle_sa_pd_demodulation_artifact_metadata(
+            dashboard, node_uid=node_uid, artifacts=normalized_records
+        )
+    except Exception as error:
+        component.logger.debug(
+            f"Could not route Artifact metadata to Demodulation: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_sa_sois_selected_details(
+            dashboard
+        )
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Signal Analysis SOI evidence: {error}"
+        )            
 
 
 async def sendSoisListTakReturn(
@@ -2750,11 +2311,10 @@ async def sendSoisListTakReturn(
     sois=None,
 ):
     """
-    Replaces the Dashboard SOI cache for one node with HIPRFISR's
-    authoritative merged SOI records, then refreshes every SOI consumer.
+    Replace the Dashboard SOI cache with HIPRFISR's authoritative records.
 
-    Linked Artifact metadata is also requested because Feature Extractor SOI
-    inputs resolve their files through the shared Artifact cache.
+    A non-empty node_uid replaces one node's records. A blank node_uid is a
+    Signal Analysis global refresh and replaces the entire Dashboard SOI cache.
     """
     frontend = component.frontend
     sois = sois or []
@@ -2763,12 +2323,15 @@ async def sendSoisListTakReturn(
     if not hasattr(frontend, "tactical_sois"):
         frontend.tactical_sois = {}
 
-    stale_keys = [
-        soi_key
-        for soi_key, record in frontend.tactical_sois.items()
-        if isinstance(record, dict)
-        and str(record.get("node_uid", "") or "").strip() == node_uid
-    ]
+    if node_uid:
+        stale_keys = [
+            soi_key
+            for soi_key, record in frontend.tactical_sois.items()
+            if isinstance(record, dict)
+            and str(record.get("node_uid", "") or "").strip() == node_uid
+        ]
+    else:
+        stale_keys = list(frontend.tactical_sois.keys())
 
     for soi_key in stale_keys:
         frontend.tactical_sois.pop(soi_key, None)
@@ -2778,25 +2341,33 @@ async def sendSoisListTakReturn(
         except Exception:
             pass
 
-    for soi in sois:
-        if not isinstance(soi, dict):
-            continue
+    frontend.sa_sois_bulk_refreshing = True
 
-        await soiUpdate(
-            component,
-            soi=soi,
-        )
+    try:
+        for soi in sois:
+            if not isinstance(soi, dict):
+                continue
+
+            await soiUpdate(
+                component,
+                soi=soi,
+            )
+    finally:
+        frontend.sa_sois_bulk_refreshing = False
 
     selected_node_uid = str(
         getattr(frontend, "selected_tactical_node_uid", "")
         or ""
     ).strip()
 
-    if selected_node_uid == node_uid:
+    if selected_node_uid and (
+        not node_uid
+        or selected_node_uid == node_uid
+    ):
         try:
             TacticalTabSlots.rebuild_tactical_node_sois(
                 frontend,
-                node_uid,
+                selected_node_uid,
             )
         except Exception as error:
             component.logger.debug(
@@ -2804,15 +2375,60 @@ async def sendSoisListTakReturn(
             )
 
     try:
-        TSITabSlots.refresh_tsi_fe_input_sois(
-            frontend
-        )
-        TSITabSlots.refresh_tsi_fe_run_sois(
+        TSITabSlots.refresh_sa_sois_table(
             frontend
         )
     except Exception as error:
         component.logger.debug(
-            "Could not refresh Feature Extractor SOI selectors "
+            "Could not refresh Signal Analysis SOIs "
+            f"after authoritative SOI refresh: {error}"
+        )
+    
+    try:
+        TSITabSlots.refresh_sa_capture_soi_context(
+            frontend
+        )
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Capture SOI context after SOI refresh: {error}"
+        )
+    
+    try:
+        TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+    except Exception as error:
+        component.logger.debug(f"Could not refresh Conditioner SOI context after SOI refresh: {error}")
+
+    try:
+        TSITabSlots.refresh_sa_inspection_soi_context(frontend)
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Inspection SOI context after SOI refresh: {error}"
+        )
+
+    try:
+        from fissure.Dashboard.Slots.TSITabSlots import pd_demodulation
+        pd_demodulation.refresh_sa_pd_demodulation_soi_context(frontend)
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Demodulation SOI context: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_conditioner_soi_context(
+            frontend
+        )
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Conditioner SOI context after SOI refresh: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_fe_input_sois(
+            frontend
+        )
+    except Exception as error:
+        component.logger.debug(
+            "Could not refresh Feature Extractor SOI selector "
             f"after authoritative SOI refresh: {error}"
         )
 
@@ -2825,6 +2441,26 @@ async def sendSoisListTakReturn(
             "Could not refresh linked Artifact metadata after SOI refresh: "
             f"{error}"
         )
+
+
+def classifierLibraryMatchReturn(
+    component: object,
+    request_id: str = "",
+    frequency_mhz=None,
+    matches: list = None,
+    error: str = "",
+):
+    """Route hub-side Classifier library-match results to Signal Analysis."""
+    try:
+        TSITabSlots.handle_sa_classifier_library_match_results(
+            component.frontend,
+            request_id=request_id,
+            frequency_mhz=frequency_mhz,
+            matches=matches or [],
+            error=error,
+        )
+    except Exception as exc:
+        component.logger.debug(f"Could not route Classifier library match results: {exc}")
 
 
 def queryPluginActionsResults(
@@ -2852,6 +2488,34 @@ def queryPluginActionsResults(
         )
         return
 
+    if context.startswith("targets_actions.single_action"):
+        SingleActionTabSlots.handle_single_action_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return
+
+    if context.startswith("targets_actions.fuzzing"):
+        FuzzingTabSlots.handle_fuzzing_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return
+
+    if context.startswith("targets_actions.sequential_action.selection"):
+        dialog = frontend.popups.get("SequentialActionSelectionDialog")
+        if dialog is not None:
+            dialog.handle_action_query_results(
+                node_uid=node_uid,
+                context=context,
+                actions=actions,
+            )
+        return
+    
     if context.startswith("detector.selection"):
         dialog = frontend.popups.get("DetectorSelectionDialog")
         if dialog is not None:
@@ -2861,7 +2525,34 @@ def queryPluginActionsResults(
                 actions=actions,
             )
         return
+    
+    if context.startswith("sa.survey"):
+        TSITabSlots.handle_sa_survey_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return
 
+    if context.startswith("sa.capture"):
+        TSITabSlots.handle_sa_capture_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return
+    
+    if context.startswith("sa.inspection"):
+        TSITabSlots.handle_sa_inspection_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return
+    
     if context.startswith("tsi.detector"):
         TSITabSlots.handle_tsi_detector_action_query_results(
             frontend,
@@ -2879,6 +2570,15 @@ def queryPluginActionsResults(
             actions=actions,
         )
         return
+    
+    if context.startswith("sa.classifier.model"):
+        TSITabSlots.handle_sa_classifier_action_query_results(
+            frontend,
+            node_uid=node_uid,
+            context=context,
+            actions=actions,
+        )
+        return    
 
     if context.startswith("tsi.feature_extractor"):
         TSITabSlots.handle_tsi_fe_action_query_results(
@@ -2969,6 +2669,37 @@ def queryPluginActionSchemaResults(
             parameters=schema.get("params", []),
         )
         return
+    
+    if context.startswith("targets_actions.single_action"):
+        SingleActionTabSlots.handle_single_action_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+        )
+        return
+
+    if context.startswith("targets_actions.fuzzing"):
+        FuzzingTabSlots.handle_fuzzing_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+        )
+        return
+
+    if context.startswith("targets_actions.sequential_action.selection"):
+        dialog = frontend.popups.get("SequentialActionSelectionDialog")
+        if dialog is not None:
+            dialog.handle_action_schema(
+                plugin_name=plugin_name,
+                action_name=action_name,
+                node_uid=node_uid,
+                parameters=schema.get("params", []),
+            )
+        return
 
     if context.startswith("detector.selection"):
         dialog = frontend.popups.get("DetectorSelectionDialog")
@@ -2980,7 +2711,37 @@ def queryPluginActionSchemaResults(
                 parameters=schema.get("params", []),
             )
         return
+    
+    if context.startswith("sa.survey"):
+        TSITabSlots.handle_sa_survey_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+        )
+        return
 
+    if context.startswith("sa.capture"):
+        TSITabSlots.handle_sa_capture_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+        )
+        return
+    
+    if context.startswith("sa.inspection"):
+        TSITabSlots.handle_sa_inspection_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+        )
+        return
+        
     if context.startswith("tsi.detector"):
         TSITabSlots.handle_tsi_detector_action_schema(
             frontend,
@@ -3001,6 +2762,17 @@ def queryPluginActionSchemaResults(
         )
         return
 
+    if context.startswith("sa.classifier.model"):
+        TSITabSlots.handle_sa_classifier_action_schema(
+            frontend,
+            plugin_name=plugin_name,
+            action_name=action_name,
+            node_uid=node_uid,
+            parameters=schema.get("params", []),
+            schema=schema,
+        )
+        return
+    
     if context.startswith("tsi.feature_extractor"):
         TSITabSlots.handle_tsi_fe_action_schema(
             frontend,
@@ -3213,6 +2985,155 @@ async def soiUpdate(component: object, soi=None):
         record,
     )
 
+    try:
+        TSITabSlots.refresh_sa_sois_selected_details(
+            frontend
+        )
+    except Exception as error:
+        component.logger.debug(
+            "Could not refresh selected Signal Analysis SOI details "
+            f"after SOI update: {error}"
+        )
+
+    if not getattr(frontend, "sa_sois_bulk_refreshing", False):
+        try:
+            TSITabSlots.refresh_sa_sois_table(frontend)
+        except Exception as error:
+            component.logger.debug(
+                f"Could not refresh Signal Analysis SOIs: {error}"
+            )    
+
+        try:
+            TSITabSlots.refresh_sa_capture_soi_context(frontend)
+        except Exception as error:
+            component.logger.debug(
+                f"Could not refresh Capture SOI context: {error}"
+            )
+
+        try:
+            TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+        except Exception as error:
+            component.logger.debug(f"Could not refresh Conditioner SOI context: {error}")
+
+        try:
+            TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+        except Exception as error:
+            component.logger.debug(f"Could not refresh Conditioner SOI context: {error}")
+
+        try:
+            TSITabSlots.refresh_sa_classifier_context(frontend)
+        except Exception as error:
+            component.logger.debug(f"Could not refresh Classifier SOI context: {error}")
+
+
+async def soiDeleted(
+    component: object,
+    soi_key: str = "",
+    node_uid: str = "",
+    soi_id: str = "",
+    success: bool = False,
+):
+    """Remove a hub-deleted SOI from Dashboard caches and views."""
+    if not success:
+        component.logger.warning(
+            "HIPRFISR could not delete SOI "
+            f"soi_key={soi_key}, soi_id={soi_id}"
+        )
+        return
+
+    frontend = component.frontend
+    soi_key = str(soi_key or "").strip()
+    node_uid = str(node_uid or "").strip()
+    soi_id = str(soi_id or "").strip()
+
+    if not soi_key and soi_id:
+        for candidate_key, record in list(
+            getattr(frontend, "tactical_sois", {}).items()
+        ):
+            if not isinstance(record, dict):
+                continue
+
+            if str(record.get("soi_id", "") or "").strip() != soi_id:
+                continue
+
+            candidate_node_uid = str(
+                record.get("node_uid", "")
+                or ""
+            ).strip()
+
+            if node_uid and candidate_node_uid != node_uid:
+                continue
+
+            soi_key = candidate_key
+            break
+
+    removed = None
+    if soi_key:
+        removed = getattr(frontend, "tactical_sois", {}).pop(
+            soi_key,
+            None,
+        )
+
+        try:
+            frontend.tactical_map.remove_soi(soi_key)
+        except Exception:
+            pass
+
+        if getattr(
+            frontend,
+            "selected_tactical_node_soi_id",
+            None,
+        ) == soi_key:
+            frontend.selected_tactical_node_soi_id = None
+
+    removed_node_uid = str(
+        (removed or {}).get("node_uid", "")
+        or node_uid
+        or ""
+    ).strip()
+
+    selected_node_uid = str(
+        getattr(frontend, "selected_tactical_node_uid", "")
+        or ""
+    ).strip()
+
+    if selected_node_uid and selected_node_uid == removed_node_uid:
+        try:
+            TacticalTabSlots.rebuild_tactical_node_sois(
+                frontend,
+                selected_node_uid,
+            )
+        except Exception as error:
+            component.logger.debug(
+                f"Could not rebuild Tactical SOIs after delete: {error}"
+            )
+
+    try:
+        TSITabSlots.refresh_sa_sois_table(frontend)
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Signal Analysis SOIs after delete: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+    except Exception as error:
+        component.logger.debug(f"Could not refresh Conditioner SOIs after delete: {error}")
+
+    try:
+        TSITabSlots.refresh_tsi_fe_input_sois(frontend)
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Feature Extractor SOIs after delete: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+    except Exception as error:
+        component.logger.debug(
+            f"Could not refresh Conditioner SOIs after delete: {error}"
+        )        
+
 
 async def dashboardArtifactTransferStatus(
         component: object,
@@ -3233,3 +3154,39 @@ async def dashboardArtifactTransferStatus(
             transfer_id,
             message,
         )
+
+
+async def refreshScapyInterfacesResults(
+    component: object,
+    node_uid="",
+    interfaces=None,
+):
+    """Populate Scapy interfaces returned by the selected Sensor Node."""
+    ScapyTabSlots.handle_scapy_interface_results(
+        component.frontend,
+        node_uid=str(node_uid or ""),
+        interfaces=interfaces or [],
+    )
+
+
+async def scapyTransmissionStatus(
+    component: object,
+    node_uid="",
+    operation_id="",
+    state="",
+    message="",
+    packets_sent=0,
+    set_rate="",
+    started="",
+):
+    """Update the Scapy tab from Sensor Node transmission state."""
+    ScapyTabSlots.handle_scapy_transmission_status(
+        component.frontend,
+        node_uid=str(node_uid or ""),
+        operation_id=str(operation_id or ""),
+        state=str(state or ""),
+        message=str(message or ""),
+        packets_sent=int(packets_sent or 0),
+        set_rate=str(set_rate or ""),
+        started=str(started or ""),
+    )

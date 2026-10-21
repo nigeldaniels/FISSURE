@@ -4,7 +4,9 @@ import json
 import xml.etree.ElementTree as ET
 from fissure.Dashboard.Slots import (
     TacticalTabSlots,
+    TargetsTabSlots,
     IQDataTabSlots,
+    SensorNodesTabSlots,
     TSITabSlots,
 )
 
@@ -49,27 +51,54 @@ def parse_cot_xml(raw_xml):
         "alert_summary": None,
 
         "detection_node_uid": None,
+        "detection_target_id": None,
         "detection_frequency_hz": None,
         "detection_power_dbm": None,
+        "detection_power_dbfs_peak": None,
+        "detection_metric": None,
+        "detection_metric_units": None,
+        "detection_matched_filter_metric": None,
+        "detection_matched_filter_units": None,
+        "detection_receiver_gain_db": None,
         "detection_timestamp": None,
         "detection_detector": None,
         "detection_opid": None,
+        "detection_ssid": None,
+        "detection_bssid": None,
+        "detection_channel": None,
+        "detection_band": None,
+        "detection_encryption": None,
+        "detection_oui_prefix": None,
+        "detection_vendor": None,
+        "detection_first_seen": None,
+        "detection_location_semantics": None,
+
+        "replay_dashboard": False,
+        "replay_id": None,
 
         "target_id": None,
         "target_label": None,
         "target_state": None,
         "target_frequency_mhz": None,
         "target_geolocation_status": None,
+        "target_geolocate": {},
+        "target_location_source": None,
         "target_identity": {},
         "target_artifact_ids": [],
         "target_artifact_links": [],
         "target_history": [],
+        "target_recommendations": [],        
         "node_uid": None,
         "ssid": None,
         "bssid": None,
+        "channel": None,
+        "band": None,
+        "encryption": None,
+        "vendor": None,
         "rssi_dbm": None,
         "last_observation_time": None,
         "source_soi_id": None,
+        "target_notes": None,
 
         "soi_node_uid": None,
         "soi_id": None,
@@ -82,6 +111,7 @@ def parse_cot_xml(raw_xml):
         "soi_model_confidence": None,
         "soi_stage": None,
         "soi_stage_order": None,
+        "soi_record": None,
 
         "artifact_name": None,
         "artifact_timestamp": None,
@@ -111,9 +141,32 @@ def parse_cot_xml(raw_xml):
             point.get("le")
         )
 
+        # Current FISSURE CoT uses 0/0 with very large CE/LE as a suppressed
+        # non-map point. Do not expose that transport placeholder as a real
+        # operational location.
+        if (
+            cot_message["lat"] == 0.0
+            and cot_message["lon"] == 0.0
+            and cot_message["ce"] is not None
+            and cot_message["le"] is not None
+            and cot_message["ce"] >= 9999999
+            and cot_message["le"] >= 9999999
+        ):
+            cot_message["lat"] = None
+            cot_message["lon"] = None
+            cot_message["hae"] = None
+            cot_message["ce"] = None
+            cot_message["le"] = None
+
     detail = root.find("detail")
 
     if detail is not None:
+        fissure_detail = detail.find("fissure")
+        if fissure_detail is not None:
+            replay_text = (fissure_detail.findtext("replay_dashboard") or "").strip().lower()
+            cot_message["replay_dashboard"] = replay_text in ("1", "true", "yes", "on")
+            cot_message["replay_id"] = (fissure_detail.findtext("replay_id") or "").strip() or None
+
         contact = detail.find("contact")
 
         if contact is not None:
@@ -160,6 +213,21 @@ def parse_cot_xml(raw_xml):
                     "summary"
                 )
             )
+            cot_message["node_uid"] = (
+                fissure_alert.findtext(
+                    "node_uid"
+                )
+            )
+            cot_message["operation_id"] = (
+                fissure_alert.findtext(
+                    "operation_id"
+                )
+            )
+            cot_message["artifact_id"] = (
+                fissure_alert.findtext(
+                    "artifact_id"
+                )
+            )
 
         # -----------------------------------------------------------------
         # Detection
@@ -172,10 +240,20 @@ def parse_cot_xml(raw_xml):
             cot_message["kind"] = (
                 "detection"
             )
+            # Preserve the existing optional FISSURE Detection display label.
+            # This is not the CoT contact callsign.
+            label = (fissure_detection.findtext("label") or "").strip()
+            if label:
+                cot_message["detection_label"] = label
             cot_message[
                 "detection_node_uid"
             ] = fissure_detection.findtext(
                 "node_uid"
+            )
+            cot_message[
+                "detection_target_id"
+            ] = fissure_detection.findtext(
+                "target_id"
             )
             cot_message[
                 "detection_frequency_hz"
@@ -186,6 +264,36 @@ def parse_cot_xml(raw_xml):
                 "detection_power_dbm"
             ] = fissure_detection.findtext(
                 "power_dbm"
+            )
+            cot_message[
+                "detection_power_dbfs_peak"
+            ] = fissure_detection.findtext(
+                "power_dbfs_peak"
+            )
+            cot_message[
+                "detection_metric"
+            ] = fissure_detection.findtext(
+                "metric"
+            )
+            cot_message[
+                "detection_metric_units"
+            ] = fissure_detection.findtext(
+                "metric_units"
+            )
+            cot_message[
+                "detection_matched_filter_metric"
+            ] = fissure_detection.findtext(
+                "matched_filter_metric"
+            )
+            cot_message[
+                "detection_matched_filter_units"
+            ] = fissure_detection.findtext(
+                "matched_filter_units"
+            )
+            cot_message[
+                "detection_receiver_gain_db"
+            ] = fissure_detection.findtext(
+                "receiver_gain_db"
             )
             cot_message[
                 "detection_timestamp"
@@ -199,8 +307,20 @@ def parse_cot_xml(raw_xml):
             )
             cot_message[
                 "detection_opid"
-            ] = fissure_detection.findtext(
-                "opid"
+            ] = (
+                fissure_detection.findtext("opid")
+                or fissure_detection.findtext("operation_id")
+            )
+            cot_message["detection_ssid"] = fissure_detection.findtext("ssid")
+            cot_message["detection_bssid"] = fissure_detection.findtext("bssid")
+            cot_message["detection_channel"] = fissure_detection.findtext("channel")
+            cot_message["detection_band"] = fissure_detection.findtext("band")
+            cot_message["detection_encryption"] = fissure_detection.findtext("encryption")
+            cot_message["detection_oui_prefix"] = fissure_detection.findtext("oui_prefix")
+            cot_message["detection_vendor"] = fissure_detection.findtext("vendor")
+            cot_message["detection_first_seen"] = fissure_detection.findtext("first_seen")
+            cot_message["detection_location_semantics"] = fissure_detection.findtext(
+                "location_semantics"
             )
 
         # -----------------------------------------------------------------
@@ -244,6 +364,26 @@ def parse_cot_xml(raw_xml):
                     "bssid"
                 )
             )
+            cot_message["channel"] = (
+                fissure_target.findtext(
+                    "channel"
+                )
+            )
+            cot_message["band"] = (
+                fissure_target.findtext(
+                    "band"
+                )
+            )
+            cot_message["encryption"] = (
+                fissure_target.findtext(
+                    "encryption"
+                )
+            )
+            cot_message["vendor"] = (
+                fissure_target.findtext(
+                    "vendor"
+                )
+            )
             cot_message["rssi_dbm"] = (
                 fissure_target.findtext(
                     "rssi_dbm"
@@ -260,6 +400,12 @@ def parse_cot_xml(raw_xml):
                 )
             )
 
+            cot_message["target_notes"] = (
+                fissure_target.findtext(
+                    "notes"
+                )
+            )
+
             cot_message[
                 "target_geolocation_status"
             ] = (
@@ -269,6 +415,10 @@ def parse_cot_xml(raw_xml):
                 or fissure_target.findtext(
                     "geolocate_status"
                 )
+            )
+
+            cot_message["target_location_source"] = (
+                fissure_target.findtext("location_source")
             )
 
             cot_message[
@@ -302,6 +452,16 @@ def parse_cot_xml(raw_xml):
                     "history_json",
                     "target_history",
                     [],
+                ),
+                (
+                    "recommendations_json",
+                    "target_recommendations",
+                    [],
+                ),
+                (
+                    "geolocate_json",
+                    "target_geolocate",
+                    {},
                 ),
             )
 
@@ -453,6 +613,16 @@ def parse_cot_xml(raw_xml):
                     "soi_stage_order"
                 ] = None
 
+            record_json = fissure_soi.findtext("record_json")
+
+            if record_json:
+                try:
+                    parsed_record = json.loads(record_json)
+                    if isinstance(parsed_record, dict):
+                        cot_message["soi_record"] = parsed_record
+                except (TypeError, ValueError):
+                    pass
+
         # -----------------------------------------------------------------
         # Artifact Metadata
         # -----------------------------------------------------------------
@@ -571,6 +741,9 @@ def cot_to_tactical_alert_record(cot_message):
         "time": cot_message.get("time") or "",
         "summary": cot_message.get("alert_summary") or "",
         "callsign": cot_message.get("callsign") or uid,
+        "node_uid": cot_message.get("node_uid") or "",
+        "operation_id": cot_message.get("operation_id") or "",
+        "artifact_id": cot_message.get("artifact_id") or "",
         "lat": cot_message.get("lat"),
         "lon": cot_message.get("lon"),
         "raw_xml": cot_message.get("raw_xml"),
@@ -587,6 +760,12 @@ def cot_to_tactical_detection_record(cot_message):
 
     freq_hz = _safe_float(cot_message.get("detection_frequency_hz"))
     power_dbm = _safe_float(cot_message.get("detection_power_dbm"))
+    power_dbfs_peak = _safe_float(cot_message.get("detection_power_dbfs_peak"))
+    metric = _safe_float(cot_message.get("detection_metric"))
+    metric_units = str(cot_message.get("detection_metric_units") or "").strip()
+    matched_filter_metric = _safe_float(cot_message.get("detection_matched_filter_metric"))
+    matched_filter_units = str(cot_message.get("detection_matched_filter_units") or "").strip()
+    receiver_gain_db = _safe_float(cot_message.get("detection_receiver_gain_db"))
 
     frequency_display = ""
     if freq_hz is not None:
@@ -594,28 +773,97 @@ def cot_to_tactical_detection_record(cot_message):
 
     power_display = ""
     if power_dbm is not None:
-        power_display = f"{power_dbm:.1f}"
+        power_display = f"{power_dbm:.1f} dBm"
+    elif power_dbfs_peak is not None:
+        power_display = f"{power_dbfs_peak:.1f} dBFS"
+    elif metric is not None:
+        power_display = f"{metric:.1f} {metric_units}" if metric_units else f"{metric:.1f}"
 
-    timestamp = (
-        cot_message.get("detection_timestamp")
-        or cot_message.get("time")
-        or ""
-    )
+    timestamp = cot_message.get("detection_timestamp") or cot_message.get("time") or ""
 
-    return {
+    record = {
         "uid": uid,
         "node_uid": cot_message.get("detection_node_uid") or "",
+        "target_id": cot_message.get("detection_target_id") or "",
+        "ssid": cot_message.get("detection_ssid") or "",
+        "bssid": cot_message.get("detection_bssid") or "",
+        "channel": cot_message.get("detection_channel") or "",
+        "band": cot_message.get("detection_band") or "",
+        "vendor": cot_message.get("detection_vendor") or "",
+        "oui_prefix": cot_message.get("detection_oui_prefix") or "",
+        "encryption": cot_message.get("detection_encryption") or "",
+        "first_seen": cot_message.get("detection_first_seen") or "",
         "frequency": frequency_display,
+        "frequency_hz": freq_hz,
         "power": power_display,
+        "power_dbm": power_dbm,
         "time": timestamp,
         "detector": cot_message.get("detection_detector") or "",
         "operation_id": cot_message.get("detection_opid") or "",
         "event_uid": uid,
-        "raw_xml": cot_message.get("raw_xml"),
-
+        "location_semantics": cot_message.get("detection_location_semantics") or "",
+        "power_dbfs_peak": power_dbfs_peak,
+        "metric": metric,
+        "metric_units": metric_units,
+        "matched_filter_metric": matched_filter_metric,
+        "matched_filter_units": matched_filter_units,
+        "receiver_gain_db": receiver_gain_db,
         "lat": cot_message.get("lat"),
         "lon": cot_message.get("lon"),
         "hae": cot_message.get("hae"),
+        "raw_xml": cot_message.get("raw_xml"),
+    }
+
+    label = str(cot_message.get("detection_label") or "").strip()
+    if label:
+        record["label"] = label
+
+    return record
+
+
+def cot_to_native_detection_record(cot_message):
+    """Convert parsed CoT Detection data into the native Detection shape used by Target geolocation UI."""
+    if not isinstance(cot_message, dict) or cot_message.get("kind") != "detection":
+        return None
+
+    target_id = str(cot_message.get("detection_target_id") or "").strip()
+    if not target_id:
+        return None
+
+    node_uid = str(cot_message.get("detection_node_uid") or "").strip()
+    timestamp = cot_message.get("detection_timestamp") or cot_message.get("time") or ""
+
+    return {
+        "target_id": target_id,
+        "node_uid": node_uid,
+        "source_id": node_uid,
+        "frequency_hz": cot_message.get("detection_frequency_hz"),
+        "power_dbm": cot_message.get("detection_power_dbm"),
+        "power_dbfs_peak": cot_message.get("detection_power_dbfs_peak"),
+        "metric": cot_message.get("detection_metric"),
+        "metric_units": cot_message.get("detection_metric_units"),
+        "matched_filter_metric": cot_message.get("detection_matched_filter_metric"),
+        "matched_filter_units": cot_message.get("detection_matched_filter_units"),
+        "receiver_gain_db": cot_message.get("detection_receiver_gain_db"),
+        "timestamp": timestamp,
+        "observation_time": timestamp,
+        "detector": cot_message.get("detection_detector") or "",
+        "detection_kind": cot_message.get("detection_detector") or "",
+        "operation_id": cot_message.get("detection_opid") or "",
+        "opid": cot_message.get("detection_opid") or "",
+        "ssid": cot_message.get("detection_ssid") or "",
+        "bssid": cot_message.get("detection_bssid") or "",
+        "channel": cot_message.get("detection_channel") or "",
+        "band": cot_message.get("detection_band") or "",
+        "encryption": cot_message.get("detection_encryption") or "",
+        "location_semantics": cot_message.get("detection_location_semantics") or "receiver_observation",
+        "latitude": cot_message.get("lat"),
+        "longitude": cot_message.get("lon"),
+        "lat": cot_message.get("lat"),
+        "lon": cot_message.get("lon"),
+        "altitude": cot_message.get("hae"),
+        "hae": cot_message.get("hae"),
+        "event_uid": cot_message.get("uid") or "",
     }
 
 
@@ -628,6 +876,22 @@ def handle_tactical_cot_message(dashboard, cot_message):
         return
 
     kind = cot_message.get("kind")
+    is_replay = bool(cot_message.get("replay_dashboard"))
+
+    # Replay is awareness-only. Historical capability/query responses should
+    # not rewrite the Dashboard's current action/customize controls.
+    if is_replay and any(
+        _cot_has_fissure_event(cot_message, event_type)
+        for event_type in (
+            "plugin_list",
+            "plugin_actions",
+            "plugin_action_schema",
+            "ecosystem_plugin_list",
+            "ecosystem_plugin_actions",
+            "ecosystem_plugin_action_schema",
+        )
+    ):
+        return
 
     if kind == "node":
         handle_tactical_node_message(dashboard, cot_message)
@@ -644,9 +908,9 @@ def handle_tactical_cot_message(dashboard, cot_message):
     elif _cot_has_fissure_event(cot_message, "plugin_list"):
         handle_tactical_plugin_list_message(dashboard, cot_message)
     elif _cot_has_fissure_event(cot_message, "plugin_actions"):
-        handle_tactical_plugin_actions_message(dashboard, cot_message)     
+        handle_tactical_plugin_actions_message(dashboard, cot_message)
     elif _cot_has_fissure_event(cot_message, "plugin_action_schema"):
-        handle_tactical_action_customize_message(dashboard, cot_message)     
+        handle_tactical_action_customize_message(dashboard, cot_message)
     elif _cot_has_fissure_event(cot_message, "ecosystem_plugin_list"):
         handle_tactical_ecosystem_plugin_list_message(dashboard, cot_message)
     elif _cot_has_fissure_event(cot_message, "ecosystem_plugin_actions"):
@@ -678,10 +942,30 @@ def handle_tactical_node_message(dashboard, cot_message):
     if not node_record:
         return
 
+    uid = node_record["uid"]
+
+    if cot_message.get("replay_dashboard"):
+        # Historical node status must not replace current node/control state.
+        # When the node is not currently connected, keep only its replayed
+        # position on the map as passive awareness.
+        node_state = getattr(frontend, "node_states", {}).get(uid, {}) or {}
+        if not bool(node_state.get("connected", False)):
+            lat = node_record.get("lat")
+            lon = node_record.get("lon")
+            if lat is not None and lon is not None:
+                frontend.tactical_map.add_node(
+                    node_id=uid,
+                    lat=lat,
+                    lon=lon,
+                    label=node_record.get("callsign") or uid,
+                    active=False,
+                    status="Replay",
+                )
+        return
+
     if not hasattr(frontend, "tactical_nodes"):
         frontend.tactical_nodes = {}
 
-    uid = node_record["uid"]
     frontend.tactical_nodes[uid] = node_record
 
     lat = node_record.get("lat")
@@ -729,205 +1013,128 @@ def handle_tactical_target_message(dashboard, cot_message):
         frontend.selected_tactical_target_id = None
 
     target_id = target_record["target_id"]
-
-    is_new_target = target_id not in frontend.tactical_targets
-
-    frontend.tactical_targets[target_id] = target_record
-
-    TacticalTabSlots.update_tactical_target_row(
-        frontend,
-        target_record,
+    existing_target = frontend.tactical_targets.get(target_id)
+    tactical_map = getattr(frontend, "tactical_map", None)
+    target_was_plotted = bool(
+        tactical_map is not None
+        and target_id in getattr(tactical_map, "target_items", {})
     )
 
-    if (
-        is_new_target
-        and frontend.ui.checkBox_tactical_targets_show_new_targets.isChecked()
-    ):
-        TacticalTabSlots.plot_tactical_target(
-            frontend,
-            target_record,
-            zoom=False,
-        )
+    if cot_message.get("replay_dashboard"):
+        # Never replace a current/live Target with historical replay state.
+        # Replay-created Targets stay local to the Dashboard and are marked
+        # non-actionable; a later live Target update naturally replaces it.
+        if isinstance(existing_target, dict) and not existing_target.get("_replay_only"):
+            return
+        target_record["_replay_only"] = True
+
+    is_new_target = existing_target is None
+    frontend.tactical_targets[target_id] = target_record
+
+    TacticalTabSlots.update_tactical_target_row(frontend, target_record)
+    TargetsTabSlots.update_target_record(frontend, target_record)
+
+    if is_new_target and frontend.ui.checkBox_tactical_targets_show_new_targets.isChecked():
+        TacticalTabSlots.plot_tactical_target(frontend, target_record, zoom=False)
+    elif target_was_plotted:
+        TacticalTabSlots.plot_tactical_target(frontend, target_record, zoom=False)
 
     if frontend.selected_tactical_target_id == target_id:
         TacticalTabSlots._slotTacticalTargetsRowSelectionChanged(frontend)
 
 
-def cot_to_tactical_target_record(
-    cot_message,
-):
-    target_id = cot_message.get(
-        "target_id"
-    )
-
+def cot_to_tactical_target_record(cot_message):
+    target_id = cot_message.get("target_id")
     if not target_id:
         return None
 
-    identity = cot_message.get(
-        "target_identity",
-        {},
-    )
-
-    if not isinstance(
-        identity,
-        dict,
-    ):
+    identity = cot_message.get("target_identity", {})
+    if not isinstance(identity, dict):
         identity = {}
 
-    artifact_ids = cot_message.get(
-        "target_artifact_ids",
-        [],
-    )
-
-    if not isinstance(
-        artifact_ids,
-        list,
-    ):
+    artifact_ids = cot_message.get("target_artifact_ids", [])
+    if not isinstance(artifact_ids, list):
         artifact_ids = []
 
-    artifact_links = cot_message.get(
-        "target_artifact_links",
-        [],
-    )
-
-    if not isinstance(
-        artifact_links,
-        list,
-    ):
+    artifact_links = cot_message.get("target_artifact_links", [])
+    if not isinstance(artifact_links, list):
         artifact_links = []
 
-    history = cot_message.get(
-        "target_history",
-        [],
-    )
-
-    if not isinstance(
-        history,
-        list,
-    ):
+    history = cot_message.get("target_history", [])
+    if not isinstance(history, list):
         history = []
 
-    latest_artifact_id = str(
-        cot_message.get(
-            "artifact_id",
-            "",
-        )
-        or ""
-    ).strip()
+    recommendations = cot_message.get("target_recommendations", [])
+    if not isinstance(recommendations, list):
+        recommendations = []
 
-    if (
-        latest_artifact_id
-        and latest_artifact_id
-        not in artifact_ids
-    ):
-        artifact_ids.append(
-            latest_artifact_id
-        )
+    geolocate = cot_message.get("target_geolocate", {})
+    if not isinstance(geolocate, dict):
+        geolocate = {}
+
+    latest_artifact_id = str(cot_message.get("artifact_id", "") or "").strip()
+    if latest_artifact_id and latest_artifact_id not in artifact_ids:
+        artifact_ids.append(latest_artifact_id)
+
+    wifi = {
+        "ssid": cot_message.get("ssid") or "",
+        "bssid": cot_message.get("bssid") or "",
+        "channel": cot_message.get("channel"),
+        "band": cot_message.get("band") or "",
+        "encryption": cot_message.get("encryption") or "",
+        "vendor": cot_message.get("vendor") or "",
+        "rssi_dbm": cot_message.get("rssi_dbm"),
+        "last_observation_time": cot_message.get("last_observation_time") or "",
+    }
+    wifi = {key: value for key, value in wifi.items() if value not in (None, "", "None")}
 
     return {
-        "uid":
-            cot_message.get("uid"),
-        "target_id":
-            target_id,
-
+        "uid": cot_message.get("uid"),
+        "target_id": target_id,
         "type": (
-            cot_message.get(
-                "target_label"
-            )
-            or cot_message.get(
-                "display_label"
-            )
-            or cot_message.get(
-                "target_frequency_mhz"
-            )
+            cot_message.get("target_label")
+            or cot_message.get("display_label")
+            or cot_message.get("target_frequency_mhz")
             or "Unknown"
         ),
         "display_label": (
-            cot_message.get(
-                "target_label"
-            )
-            or cot_message.get(
-                "display_label"
-            )
+            cot_message.get("target_label")
+            or cot_message.get("display_label")
             or ""
         ),
-        "state":
-            cot_message.get(
-                "target_state",
-                "",
-            ),
-        "updated":
-            cot_message.get(
-                "time",
-                "",
-            ),
-
-        "lat":
-            cot_message.get("lat"),
-        "lon":
-            cot_message.get("lon"),
-        "ce_m":
-            cot_message.get("ce"),
-        "hae_m":
-            cot_message.get("hae"),
-
-        "node_uid":
-            cot_message.get(
-                "node_uid",
-                "",
-            ),
-        "ssid":
-            cot_message.get(
-                "ssid",
-                "",
-            ),
-        "bssid":
-            cot_message.get(
-                "bssid",
-                "",
-            ),
-        "rssi_dbm":
-            cot_message.get(
-                "rssi_dbm",
-                "",
-            ),
-        "last_observation_time":
-            cot_message.get(
-                "last_observation_time",
-                "",
-            ),
+        "state": cot_message.get("target_state", ""),
+        "updated": cot_message.get("time", ""),
+        "lat": cot_message.get("lat"),
+        "lon": cot_message.get("lon"),
+        "ce_m": cot_message.get("ce"),
+        "hae_m": cot_message.get("hae"),
+        "node_uid": cot_message.get("node_uid", ""),
+        "ssid": wifi.get("ssid", ""),
+        "bssid": wifi.get("bssid", ""),
+        "channel": wifi.get("channel"),
+        "band": wifi.get("band", ""),
+        "encryption": wifi.get("encryption", ""),
+        "vendor": wifi.get("vendor", ""),
+        "rssi_dbm": wifi.get("rssi_dbm"),
+        "last_observation_time": wifi.get("last_observation_time", ""),
+        "wifi": wifi,
         "geolocation_status": (
-            cot_message.get(
-                "target_geolocation_status"
-            )
+            geolocate.get("status")
+            or cot_message.get("target_geolocation_status")
             or "idle"
         ),
-
-        "target_frequency_mhz":
-            cot_message.get(
-                "target_frequency_mhz"
-            ),
-        "source_soi_id":
-            cot_message.get(
-                "source_soi_id",
-                "",
-            ),
-
-        "identity":
-            identity,
-        "artifact_id":
-            latest_artifact_id,
-        "artifact_ids":
-            artifact_ids,
-        "artifact_links":
-            artifact_links,
-        "history":
-            history,
-
-        "raw_xml":
-            cot_message.get(
-                "raw_xml"
-            ),
+        "geolocate": geolocate,
+        "location_source": cot_message.get("target_location_source") or "",
+        "target_frequency_mhz": cot_message.get("target_frequency_mhz"),
+        "source_soi_id": cot_message.get("source_soi_id", ""),
+        "notes": cot_message.get("target_notes", ""),
+        "identity": identity,
+        "artifact_id": latest_artifact_id,
+        "artifact_ids": artifact_ids,
+        "artifact_links": artifact_links,
+        "history": history,
+        "recommendations": recommendations,
+        "raw_xml": cot_message.get("raw_xml"),
     }
 
 
@@ -960,6 +1167,11 @@ def handle_tactical_alert_message(dashboard, cot_message):
         )
 
     TacticalTabSlots.update_tactical_alert_row(
+        frontend,
+        alert_record,
+    )
+
+    SensorNodesTabSlots.append_sensor_nodes_activity_alert(
         frontend,
         alert_record,
     )
@@ -1300,9 +1512,12 @@ def handle_tactical_detection_message(dashboard, cot_message):
 
 
 def handle_tactical_soi_message(dashboard, cot_message):
+    """
+    Store one live Tactical SOI update and refresh every Dashboard SOI consumer.
+    """
     frontend = dashboard.frontend
-
     soi_record = cot_to_tactical_soi_record(cot_message)
+
     if not soi_record:
         return
 
@@ -1310,11 +1525,18 @@ def handle_tactical_soi_message(dashboard, cot_message):
         frontend.tactical_sois = {}
 
     soi_key = soi_record["soi_key"]
-
     existing = frontend.tactical_sois.get(soi_key)
-    if existing:
+
+    if isinstance(existing, dict):
         new_stage_order = soi_record.get("stage_order")
         old_stage_order = existing.get("stage_order")
+
+        try:
+            new_stage_order = int(new_stage_order) if new_stage_order is not None else None
+            old_stage_order = int(old_stage_order) if old_stage_order is not None else None
+        except (TypeError, ValueError):
+            new_stage_order = None
+            old_stage_order = None
 
         if (
             new_stage_order is not None
@@ -1326,77 +1548,116 @@ def handle_tactical_soi_message(dashboard, cot_message):
             )
             return
 
+        merged_record = dict(existing)
+        merged_record.update(soi_record)
+        soi_record = merged_record
+
     frontend.tactical_sois[soi_key] = soi_record
+
+    try:
+        TSITabSlots.refresh_sa_sois_table(frontend)
+    except Exception as error:
+        frontend.logger.debug(f"Could not refresh Signal Analysis SOIs from Tactical update: {error}")
+
+    try:
+        TSITabSlots.refresh_sa_capture_soi_context(frontend)
+    except Exception as error:
+        frontend.logger.debug(
+            f"Could not refresh Capture SOI context from Tactical update: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_conditioner_soi_context(frontend)
+    except Exception as error:
+        frontend.logger.debug(
+            f"Could not refresh Conditioner SOI context from Tactical update: {error}"
+        )
+
+    try:
+        TSITabSlots.refresh_tsi_fe_input_sois(frontend)
+        TSITabSlots.refresh_tsi_fe_run_sois(frontend)
+    except Exception as error:
+        frontend.logger.debug(f"Could not refresh Feature Extractor SOIs from Tactical update: {error}")
 
     selected_node_uid = getattr(frontend, "selected_tactical_node_uid", None)
     soi_node_uid = soi_record.get("node_uid")
 
-    if not selected_node_uid:
+    if not selected_node_uid or soi_node_uid != selected_node_uid:
         return
 
-    if soi_node_uid != selected_node_uid:
-        return
-
-    TacticalTabSlots.update_tactical_node_soi_row(
-        frontend,
-        soi_record,
-    )
+    TacticalTabSlots.update_tactical_node_soi_row(frontend, soi_record)
 
 
 def cot_to_tactical_soi_record(cot_message):
-    node_uid = cot_message.get("soi_node_uid", "")
-    soi_id = cot_message.get("soi_id", "")
+    """
+    Build a Tactical SOI record from the complete canonical record embedded in CoT.
+    """
+    node_uid = str(cot_message.get("soi_node_uid", "") or "")
+    soi_id = str(cot_message.get("soi_id", "") or "")
 
     if not soi_id:
         return None
 
     soi_key = f"{node_uid}:{soi_id}"
+    canonical = cot_message.get("soi_record")
+    record = dict(canonical) if isinstance(canonical, dict) else {}
 
-    frequency_mhz = cot_message.get("soi_frequency_mhz")
-
-    frequency_display = ""
-    if frequency_mhz not in [None, "", "None"]:
-        try:
-            frequency_display = f"{float(frequency_mhz):.3f} MHz"
-        except Exception:
-            frequency_display = str(frequency_mhz)
-
-    model_classification = cot_message.get("soi_model_classification", "")
-    model_confidence = cot_message.get("soi_model_confidence", "")
-
-    model_display = model_classification
-    if model_classification and model_confidence not in [None, "", "None"]:
-        model_display = f"{model_classification} ({model_confidence}%)"
-
-    return {
+    record.update({
         "soi_key": soi_key,
         "uid": cot_message.get("uid"),
         "event_id": cot_message.get("uid"),
-
         "node_uid": node_uid,
         "soi_id": soi_id,
-        "operation_id": cot_message.get("soi_operation_id", ""),
-        "artifact_id": cot_message.get("soi_artifact_id", ""),
+    })
 
-        "frequency_mhz": frequency_mhz,
-        "frequency_display": frequency_display,
-        "status": cot_message.get("soi_status", ""),
-        "time": cot_message.get("time", ""),
-
-        "stage": cot_message.get("soi_stage", ""),
+    updates = {
+        "operation_id": cot_message.get("soi_operation_id"),
+        "artifact_id": cot_message.get("soi_artifact_id"),
+        "frequency_mhz": cot_message.get("soi_frequency_mhz"),
+        "status": cot_message.get("soi_status"),
+        "stage": cot_message.get("soi_stage"),
         "stage_order": cot_message.get("soi_stage_order"),
-
-        "model_classification": model_classification,
-        "model_confidence_pct": model_confidence,
-        "model_classification_display": model_display,
-        "database_classification": cot_message.get("soi_database_classification", ""),
-
-        "lat": cot_message.get("lat"),
-        "lon": cot_message.get("lon"),
-        "hae_m": cot_message.get("hae"),
-
-        "raw_xml": cot_message.get("raw_xml"),
+        "model_classification": cot_message.get("soi_model_classification"),
+        "model_confidence": cot_message.get("soi_model_confidence"),
+        "database_classification": cot_message.get("soi_database_classification"),
     }
+
+    for key, value in updates.items():
+        if value not in (None, "", "None"):
+            record[key] = value
+
+    frequency_mhz = record.get("frequency_mhz")
+    if frequency_mhz not in (None, "", "None"):
+        try:
+            record["frequency_display"] = f"{float(frequency_mhz):.3f} MHz"
+        except Exception:
+            record["frequency_display"] = str(frequency_mhz)
+
+    model_classification = str(record.get("model_classification", "") or "")
+    model_confidence = record.get("model_confidence")
+
+    if model_confidence in (None, "", "None"):
+        model_confidence = record.get("model_confidence_pct")
+
+    record["model_confidence_pct"] = model_confidence
+    record["model_classification_display"] = model_classification
+
+    if model_classification and model_confidence not in (None, "", "None"):
+        record["model_classification_display"] = f"{model_classification} ({model_confidence}%)"
+
+    record["time"] = cot_message.get("time") or record.get("time", "")
+
+    if cot_message.get("lat") is not None:
+        record["lat"] = cot_message.get("lat")
+
+    if cot_message.get("lon") is not None:
+        record["lon"] = cot_message.get("lon")
+
+    if cot_message.get("hae") is not None:
+        record["hae_m"] = cot_message.get("hae")
+
+    record["raw_xml"] = cot_message.get("raw_xml")
+    return record
 
 
 def handle_tactical_artifact_message(dashboard, cot_message):
@@ -1465,6 +1726,11 @@ def handle_tactical_artifact_message(dashboard, cot_message):
             )
 
     IQDataTabSlots.handle_iq_record_artifact_complete(
+        frontend,
+        artifact_record,
+    )
+
+    TSITabSlots.handle_sa_capture_artifact_complete(
         frontend,
         artifact_record,
     )

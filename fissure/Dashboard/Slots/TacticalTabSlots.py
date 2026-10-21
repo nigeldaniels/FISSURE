@@ -11,9 +11,45 @@ import asyncio
 import html
 
 
+def _replot_tactical_nodes_on_map(dashboard):
+    """Re-add current Tactical nodes after a map-pack reload."""
+    tactical_nodes = getattr(dashboard, "tactical_nodes", {})
+
+    if not isinstance(tactical_nodes, dict):
+        return
+
+    for uid, node_record in tactical_nodes.items():
+        if not isinstance(node_record, dict):
+            continue
+
+        lat = node_record.get("lat")
+        lon = node_record.get("lon")
+
+        if lat is None or lon is None:
+            continue
+
+        status = str(node_record.get("status") or "").strip()
+        active = status.lower() not in (
+            "",
+            "idle",
+            "stopped",
+            "unknown",
+            "disconnected",
+        )
+
+        dashboard.tactical_map.add_node(
+            node_id=uid,
+            lat=lat,
+            lon=lon,
+            label=node_record.get("callsign") or uid,
+            active=active,
+            status=status,
+        )
+
+
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTacticalRefreshMapPacks(dashboard: QtCore.QObject):
-    """ 
+    """
     Refreshes the combobox of map pack names from the map data folder.
     """
     combo = dashboard.ui.comboBox_tactical_map_pack
@@ -37,9 +73,90 @@ def _slotTacticalRefreshMapPacks(dashboard: QtCore.QObject):
 
     if combo.currentText():
         try:
-            dashboard.tactical_map.load_map(str(combo.currentText()), preferred_zoom=None, fit=False)
+            dashboard.tactical_map.load_map(
+                str(combo.currentText()),
+                preferred_zoom=None,
+                fit=False,
+            )
+            _replot_tactical_nodes_on_map(dashboard)
         except Exception as e:
-            dashboard.logger.error(f"[Tactical] Failed to load map pack '{combo.currentText()}': {e}")
+            dashboard.logger.error(
+                f"[Tactical] Failed to load map pack '{combo.currentText()}': {e}"
+            )
+
+
+def initialize_tactical_map_zoom_slider(dashboard: QtCore.QObject):
+    slider = dashboard.ui.horizontalSlider_tactical_map_zoom
+    slider.blockSignals(True)
+    slider.setMinimum(0)
+    slider.setMaximum(0)
+    slider.setSingleStep(1)
+    slider.setPageStep(1)
+    slider.setTracking(False)
+    slider.setTickInterval(1)
+    slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+    slider.setEnabled(False)
+    slider.blockSignals(False)
+
+    dashboard.tactical_map.set_zoom_changed_callback(
+        lambda zoom, zooms: _sync_tactical_map_zoom_slider(
+            dashboard,
+            zoom,
+            zooms,
+        )
+    )
+
+    _sync_tactical_map_zoom_slider(
+        dashboard,
+        dashboard.tactical_map.map_zoom,
+        dashboard.tactical_map.map_available_zooms,
+    )
+
+
+def _sync_tactical_map_zoom_slider(dashboard, zoom, zooms):
+    slider = dashboard.ui.horizontalSlider_tactical_map_zoom
+    zooms = sorted(int(value) for value in (zooms or []))
+
+    slider.blockSignals(True)
+
+    if not zooms or zoom not in zooms:
+        slider.setMinimum(0)
+        slider.setMaximum(0)
+        slider.setValue(0)
+        slider.setEnabled(False)
+        slider.setToolTip("Map zoom unavailable")
+        slider.blockSignals(False)
+        return
+
+    index = zooms.index(int(zoom))
+    slider.setMinimum(0)
+    slider.setMaximum(len(zooms) - 1)
+    slider.setValue(index)
+    slider.setEnabled(len(zooms) > 1)
+    slider.setToolTip(f"Map zoom level: {zoom}")
+    slider.blockSignals(False)
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
+def _slotTacticalMapZoomChanged(dashboard: QtCore.QObject):
+    zooms = sorted(dashboard.tactical_map.map_available_zooms)
+    if not zooms:
+        return
+
+    index = dashboard.ui.horizontalSlider_tactical_map_zoom.value()
+    index = max(0, min(index, len(zooms) - 1))
+    zoom = zooms[index]
+
+    if zoom == dashboard.tactical_map.map_zoom:
+        return
+
+    center_lat, center_lon = dashboard.tactical_map.current_view_center_latlon()
+    dashboard.tactical_map.load_zoom(
+        zoom,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        fit=False,
+    )
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -54,14 +171,25 @@ def _slotTacticalMapPackChanged(dashboard: QtCore.QObject):
     if not map_name:
         dashboard.tactical_map.scene.clear()
         dashboard.tactical_map.scene.setSceneRect(0, 0, 0, 0)
-        dashboard.logger.info("[Tactical] No map pack selected. Cleared tactical map.")
+        dashboard.logger.info(
+            "[Tactical] No map pack selected. Cleared tactical map."
+        )
         return
 
     try:
-        dashboard.tactical_map.load_map(map_name, preferred_zoom=None, fit=False)
-        dashboard.logger.info(f"[Tactical] Loaded map pack: {map_name}")
+        dashboard.tactical_map.load_map(
+            map_name,
+            preferred_zoom=None,
+            fit=False,
+        )
+        _replot_tactical_nodes_on_map(dashboard)
+        dashboard.logger.info(
+            f"[Tactical] Loaded map pack: {map_name}"
+        )
     except Exception as e:
-        dashboard.logger.error(f"[Tactical] Failed to load map pack '{map_name}': {e}")
+        dashboard.logger.error(
+            f"[Tactical] Failed to load map pack '{map_name}': {e}"
+        )
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -69,14 +197,13 @@ def _slotTacticalDownloadMapPack(dashboard: QtCore.QObject):
     """
     Opens the Download Map Pack dialog.
     """
-    # Load the Dialog
     download_map_pack_dlg = DownloadMapPackDialog(parent=dashboard)
-    download_map_pack_dlg.show()
-    # download_map_pack_dlg.exec_()
 
     if download_map_pack_dlg.exec_() == QtWidgets.QDialog.Accepted:
         _slotTacticalRefreshMapPacks(dashboard)
-        dashboard.ui.comboBox_tactical_map_pack.setCurrentText(download_map_pack_dlg.map_pack_name)
+        dashboard.ui.comboBox_tactical_map_pack.setCurrentText(
+            download_map_pack_dlg.map_pack_name
+        )
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -168,6 +295,8 @@ def populate_tactical_node_details(dashboard: QtCore.QObject, node_uid):
 
     _updateTacticalNodeInfoFrameState(dashboard)
 
+    update_tactical_node_stream_button_state(dashboard)
+
 
 def update_tactical_node_stop_button_state(dashboard: QtCore.QObject, node: dict):
     status = (node.get("status") or "").strip().lower()
@@ -180,6 +309,25 @@ def update_tactical_node_stop_button_state(dashboard: QtCore.QObject, node: dict
     ]
 
     dashboard.ui.pushButton_tactical_node_stop.setEnabled(stop_enabled)
+
+
+def update_tactical_node_stream_button_state(
+    dashboard: QtCore.QObject,
+):
+    enabled = bool(
+        getattr(
+            dashboard,
+            "selected_tactical_node_uid",
+            None,
+        )
+    )
+
+    dashboard.ui.pushButton_tactical_node_video.setEnabled(
+        enabled
+    )
+    dashboard.ui.pushButton_tactical_node_audio.setEnabled(
+        enabled
+    )
 
 
 def restore_tactical_node_capabilities(
@@ -868,21 +1016,26 @@ def update_tactical_node_action_parameters(
     parameters,
 ):
     scroll_area = dashboard.ui.scrollArea_tactical_node_action_parameters
+    scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+    scroll_area.setWidgetResizable(True)
 
     content_widget = scroll_area.widget()
 
     if content_widget is None:
         content_widget = QtWidgets.QWidget()
         scroll_area.setWidget(content_widget)
-        scroll_area.setWidgetResizable(True)
+
+    # Reset any minimum width left by the previously selected Action.
+    content_widget.setMinimumWidth(0)
 
     layout = content_widget.layout()
 
     if layout is None:
         layout = QtWidgets.QVBoxLayout(content_widget)
 
-    layout.setContentsMargins(4, 2, 4, 2)
-    layout.setSpacing(2)
+    layout.setContentsMargins(4, 2, 2, 2)
+    layout.setSpacing(4)
 
     while layout.count():
         item = layout.takeAt(0)
@@ -894,6 +1047,7 @@ def update_tactical_node_action_parameters(
     dashboard.tactical_action_parameter_widgets = {}
 
     description_text = ""
+    parameter_label_texts = []
 
     for param in parameters:
         param_name = param.get("name", "")
@@ -901,6 +1055,43 @@ def update_tactical_node_action_parameters(
         if param_name == "description":
             description_text = str(param.get("default", ""))
             continue
+
+        if param_name:
+            parameter_label_texts.append(
+                str(param.get("label") or param_name)
+            )
+
+    label_probe = QtWidgets.QLabel()
+    parameter_label_font = label_probe.font()
+    parameter_label_font.setPointSize(
+        max(parameter_label_font.pointSize() - 1, 8)
+    )
+    label_probe.setFont(parameter_label_font)
+    label_metrics = label_probe.fontMetrics()
+
+    parameter_label_width = 125
+
+    if parameter_label_texts:
+        parameter_label_width = max(
+            125,
+            max(
+                label_metrics.horizontalAdvance(label_text)
+                for label_text in parameter_label_texts
+            ),
+        )
+
+    # Keep the generated editor usable instead of allowing Qt to collapse it
+    # just to avoid a horizontal scrollbar.
+    parameter_widget_minimum_width = 105
+
+    # QHBoxLayout contents:
+    #   label + spacing + parameter widget + right margin
+    parameter_row_minimum_width = (
+        parameter_label_width
+        + 3
+        + parameter_widget_minimum_width
+        + 2
+    )
 
     if description_text:
         description_label = QtWidgets.QLabel(description_text)
@@ -929,6 +1120,7 @@ def update_tactical_node_action_parameters(
             continue
 
         row_widget = QtWidgets.QWidget()
+        row_widget.setMinimumWidth(parameter_row_minimum_width)
         row_widget.setMinimumHeight(20)
         row_widget.setMaximumHeight(26)
 
@@ -943,15 +1135,12 @@ def update_tactical_node_action_parameters(
             "uiRole",
             "parameterLabel",
         )
-        label.setFixedWidth(125)
+        label.setFixedWidth(parameter_label_width)
         label.setMinimumHeight(20)
         label.setMaximumHeight(24)
         label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         label.setToolTip(label_text)
-
-        label_font = label.font()
-        label_font.setPointSize(max(label_font.pointSize() - 1, 8))
-        label.setFont(label_font)
+        label.setFont(parameter_label_font)
 
         row_layout.addWidget(label)
         row_layout.setStretch(0, 0)
@@ -1008,6 +1197,7 @@ def update_tactical_node_action_parameters(
         widget.setToolTip(param.get("description", ""))
 
         make_tactical_parameter_widget_compact(widget)
+        widget.setMinimumWidth(parameter_widget_minimum_width)
 
         row_layout.addWidget(widget, 1)
 
@@ -1019,7 +1209,17 @@ def update_tactical_node_action_parameters(
 
     apply_pending_tactical_customize_defaults(dashboard)
 
+    # Give the content widget a real minimum width so QScrollArea can determine
+    # when horizontal scrolling is actually required for long labels.
+    # This uses the same compact spacing as Inspection.
+    # horizontal scrollbar is actually required for long labels.
+    content_widget.setMinimumWidth(parameter_row_minimum_width + 8)
     content_widget.adjustSize()
+
+    # Start each newly selected Action at the left side of its parameter panel.
+    scroll_area.horizontalScrollBar().setValue(0)
+    scroll_area.verticalScrollBar().setValue(0)
+
     scroll_area.update()
 
 
@@ -1811,6 +2011,23 @@ def update_tactical_detection_row(dashboard: QtCore.QObject, detection_record):
         format_detection_time(detection_record.get("time", "")),
     ]
 
+    tooltip_lines = []
+    ssid = str(detection_record.get("ssid") or "").strip()
+    bssid = str(detection_record.get("bssid") or "").strip()
+    channel = str(detection_record.get("channel") or "").strip()
+    vendor = str(detection_record.get("vendor") or "").strip()
+
+    if ssid:
+        tooltip_lines.append(f"SSID: {ssid}")
+    if bssid:
+        tooltip_lines.append(f"BSSID: {bssid}")
+    if channel:
+        tooltip_lines.append(f"Channel: {channel}")
+    if vendor:
+        tooltip_lines.append(f"Vendor: {vendor}")
+
+    tooltip = "\n".join(tooltip_lines)
+
     existing_row = None
 
     for row in range(table.rowCount()):
@@ -1832,6 +2049,7 @@ def update_tactical_detection_row(dashboard: QtCore.QObject, detection_record):
 
         item.setText(str(value))
         item.setData(QtCore.Qt.UserRole, uid)
+        item.setToolTip(tooltip)
 
     table.resizeColumnsToContents()
     table.resizeRowsToContents()
@@ -2082,6 +2300,24 @@ def _slotTacticalNodeDetectionsPlotZoomClicked(dashboard: QtCore.QObject):
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
+def _slotTacticalNodeDetectionsPlotAllClicked(dashboard: QtCore.QObject):
+    table = dashboard.ui.tableWidget_tactical_node_detections
+
+    for row in range(table.rowCount()):
+        item = table.item(row, 0)
+        if item is None:
+            continue
+
+        detection_uid = item.data(QtCore.Qt.UserRole)
+        if not detection_uid:
+            continue
+
+        detection = dashboard.tactical_detections.get(detection_uid)
+        if detection:
+            plot_tactical_node_detection(dashboard, detection, zoom=False)
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
 def _slotTacticalNodeDetectionsRemoveClicked(dashboard: QtCore.QObject):
     detection = get_selected_tactical_node_detection(dashboard)
     if not detection:
@@ -2122,7 +2358,9 @@ def plot_tactical_node_detection(
     if not uid or lat is None or lon is None:
         return
 
-    label = detection.get("frequency") or uid
+    ssid = str(detection.get("ssid") or "").strip()
+    # A Detection's optional display label is independent of any CoT callsign.
+    label = str(detection.get("label") or "").strip() or ssid or detection.get("frequency") or uid
 
     dashboard.tactical_map.add_detection(
         detection_id=uid,
@@ -2301,20 +2539,21 @@ def _slotTacticalEcosystemClearNodeRowsClicked(
 
 @qasync.asyncSlot(QtCore.QObject)
 async def _slotTacticalTargetsRefreshTargetsClicked(dashboard):
-    """
-    Requests the current target list from the hub.
-    """
+    """Requests the current Target list from the Hub."""
+    from fissure.Dashboard.Slots import TargetsTabSlots
+
     try:
-        dashboard.tactical_targets = {}
-
-        dashboard.ui.tableWidget_tactical_targets.setRowCount(0)
-
-        await dashboard.backend.tacticalTargetsRefreshTargets()
-
-    except Exception as e:
-        dashboard.logger.error(
-            f"[Tactical] Failed requesting target list: {e}"
+        dashboard.pending_targets_actions_target_id = getattr(
+            dashboard, "selected_targets_actions_target_id", None
         )
+        dashboard.selected_targets_actions_target_id = None
+        dashboard.tactical_targets = {}
+        dashboard.ui.tableWidget_tactical_targets.setRowCount(0)
+        clear_tactical_targets_details(dashboard)
+        TargetsTabSlots.refresh_targets_view(dashboard)
+        await dashboard.backend.tacticalTargetsRefreshTargets()
+    except Exception as e:
+        dashboard.logger.error(f"[Tactical] Failed requesting target list: {e}")
 
 
 def update_tactical_target_row(
@@ -3302,49 +3541,38 @@ def _slotTacticalTargetsPlotAllClicked(dashboard: QtCore.QObject):
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTacticalTargetsDeleteRowClicked(dashboard: QtCore.QObject):
-    table = dashboard.ui.tableWidget_tactical_targets
+    from fissure.Dashboard.Slots import TargetsTabSlots
 
+    table = dashboard.ui.tableWidget_tactical_targets
     selected_items = table.selectedItems()
     if not selected_items:
         return
 
     row = selected_items[0].row()
-
     id_item = table.item(row, 0)
     if id_item is None:
         return
 
     target_id = id_item.data(QtCore.Qt.UserRole) or id_item.text()
-
-    # Remove plotted marker + persistent map overlay record
     dashboard.tactical_map.remove_target(target_id)
-
-    # Remove dashboard target record
     dashboard.tactical_targets.pop(target_id, None)
-
-    # Remove row
     table.removeRow(row)
 
-    # Clear details if deleting selected target
     if dashboard.selected_tactical_target_id == target_id:
         clear_tactical_targets_details(dashboard)
+
+    TargetsTabSlots.refresh_targets_view(dashboard)
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
 def _slotTacticalTargetsClearRowsClicked(dashboard: QtCore.QObject):
-    table = dashboard.ui.tableWidget_tactical_targets
+    from fissure.Dashboard.Slots import TargetsTabSlots
 
-    # Clear plotted markers + persistent map overlay records
     dashboard.tactical_map.clear_target_records()
-
-    # Clear dashboard target records
     dashboard.tactical_targets.clear()
-
-    # Clear table
-    table.setRowCount(0)
-
-    # Clear details panel
+    dashboard.ui.tableWidget_tactical_targets.setRowCount(0)
     clear_tactical_targets_details(dashboard)
+    TargetsTabSlots.refresh_targets_view(dashboard)
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -3352,6 +3580,20 @@ def _slotTacticalTargetsShowCeRingsToggled(dashboard: QtCore.QObject):
     checked = dashboard.ui.checkBox_tactical_targets_show_ce_rings.isChecked()
 
     dashboard.tactical_map.set_show_ce_rings(checked)
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
+def _slotTacticalDetectionLabelsToggled(dashboard: QtCore.QObject):
+    checked = dashboard.ui.checkBox_tactical_detection_labels.isChecked()
+
+    dashboard.tactical_map.set_show_detection_labels(checked)
+
+
+@QtCore.pyqtSlot(QtCore.QObject)
+def _slotTacticalTargetLabelsToggled(dashboard: QtCore.QObject):
+    checked = dashboard.ui.checkBox_tactical_target_labels.isChecked()
+
+    dashboard.tactical_map.set_show_target_labels(checked)
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -5821,7 +6063,7 @@ def update_tactical_targets_geolocate_button_state(
 ):
     button = dashboard.ui.pushButton_tactical_targets_geolocate
 
-    if not target:
+    if not target or target.get("_replay_only"):
         button.setText("Geolocate")
         button.setEnabled(False)
         return
@@ -5848,7 +6090,7 @@ async def _slotTacticalTargetsGeolocateClicked(dashboard: QtCore.QObject):
         return
 
     target = dashboard.tactical_targets.get(target_id)
-    if not target:
+    if not target or target.get("_replay_only"):
         return
 
     status = get_target_geolocate_status(target)
@@ -5861,11 +6103,44 @@ async def _slotTacticalTargetsGeolocateClicked(dashboard: QtCore.QObject):
         await dashboard.backend.tacticalTargetsGeolocateStop(
             target_id=target_id,
         )
-    else:
-        await dashboard.backend.tacticalTargetsGeolocateStart(
-            target_id=target_id,
-            search_similar_targets=search_similar_targets,
-        )
+        return
+
+    similar_target_ids = []
+
+    if search_similar_targets:
+        # Use exactly the Targets currently visible to the operator in the
+        # Targets table. Do not silently pull hidden/stale hub Targets into a
+        # Search Similar session.
+        table = dashboard.ui.tableWidget1_ta_targets
+
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+
+            candidate_target_id = str(
+                item.data(QtCore.Qt.UserRole)
+                or ""
+            ).strip()
+
+            if (
+                candidate_target_id
+                and candidate_target_id
+                not in similar_target_ids
+            ):
+                similar_target_ids.append(
+                    candidate_target_id
+                )
+
+        if target_id not in similar_target_ids:
+            similar_target_ids.insert(0, target_id)
+
+    await dashboard.backend.tacticalTargetsGeolocateStart(
+        target_id=target_id,
+        search_similar_targets=search_similar_targets,
+        preferred_node_uid=getattr(dashboard, "selected_node_uid", ""),
+        similar_target_ids=similar_target_ids,
+    )
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -7151,6 +7426,7 @@ def _showTacticalNodeDetectionsContextMenu(
 
     action_plot = menu.addAction("Plot")
     action_plot_zoom = menu.addAction("Plot + Zoom")
+    action_plot_all = menu.addAction("Plot All")
     action_remove = menu.addAction("Remove from Map")
 
     menu.addSeparator()
@@ -7160,6 +7436,7 @@ def _showTacticalNodeDetectionsContextMenu(
 
     action_plot.setEnabled(has_detection)
     action_plot_zoom.setEnabled(has_detection)
+    action_plot_all.setEnabled(has_rows)
     action_remove.setEnabled(has_detection)
     action_delete.setEnabled(has_detection)
     action_clear.setEnabled(has_rows)
@@ -7170,6 +7447,8 @@ def _showTacticalNodeDetectionsContextMenu(
         _slotTacticalNodeDetectionsPlotClicked(dashboard)
     elif chosen_action == action_plot_zoom:
         _slotTacticalNodeDetectionsPlotZoomClicked(dashboard)
+    elif chosen_action == action_plot_all:
+        _slotTacticalNodeDetectionsPlotAllClicked(dashboard)
     elif chosen_action == action_remove:
         _slotTacticalNodeDetectionsRemoveClicked(dashboard)
     elif chosen_action == action_delete:
@@ -7596,10 +7875,7 @@ async def _downloadTacticalTargetData(
         return ""
     
 
-@QtCore.pyqtSlot(
-    QtCore.QObject,
-    QtCore.QPoint,
-)
+@QtCore.pyqtSlot(QtCore.QObject, QtCore.QPoint)
 def _showTacticalTargetsDetailsContextMenu(
     dashboard: QtCore.QObject,
     position: QtCore.QPoint,
@@ -8301,9 +8577,6 @@ def populate_tactical_targets_details(
 
     node_id = (
         target.get("node_uid")
-        or target.get(
-            "sensor_node_id"
-        )
         or target.get("node_id")
     )
 
@@ -8660,7 +8933,6 @@ def populate_tactical_targets_details(
             "hae",
             "hae_m",
             "node_uid",
-            "sensor_node_id",
             "node_id",
             "created_time",
             "last_update_time",
@@ -8985,9 +9257,7 @@ def _updateTacticalTargetsDownloadDataButton(
         )
 
 
-@QtCore.pyqtSlot(
-    QtCore.QObject
-)
+@QtCore.pyqtSlot(QtCore.QObject)
 def _slotTacticalTargetsDownloadDataClicked(
     dashboard: QtCore.QObject,
 ):
@@ -9063,4 +9333,103 @@ def _slotTacticalTargetsDownloadDataClicked(
 
     task.add_done_callback(
         download_finished
+    )
+
+
+@qasync.asyncSlot(QtCore.QObject)
+async def _slotTacticalNodeVideoClicked(dashboard):
+    """Starts video streaming on the selected Tactical node and opens the receiver."""
+    uid = dashboard.ui.label2_tactical_node_uuid.text().strip()
+
+    if not uid:
+        dashboard.logger.warning(
+            "[Tactical] No node selected for video stream."
+        )
+        return
+
+    node_state = (
+        getattr(
+            dashboard,
+            "node_states",
+            {},
+        ).get(
+            uid,
+            {},
+        )
+        or {}
+    )
+
+    source_ip = str(
+        node_state.get("node_ip_address")
+        or node_state.get("ip")
+        or ""
+    ).strip()
+
+    if source_ip.lower() == "ipc":
+        source_ip = "127.0.0.1"
+
+    if not source_ip:
+        dashboard.logger.warning(
+            "[Tactical] Selected node has no IP address for video streaming."
+        )
+        return
+
+    parameters = {
+        "rtsp_port": 8554,
+        "device": "/dev/video0",
+        "source_format": "YUY2",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "bitrate_kbps": 750,
+    }
+
+    await dashboard.backend.tacticalNodeExecute(
+        [uid],
+        "Base",
+        "stream_video",
+        parameters,
+    )
+
+    await asyncio.sleep(1.0)
+
+    from fissure.Dashboard.Slots import MenuBarSlots
+
+    MenuBarSlots._slotMenuVideoStreamReceiverClicked(
+        dashboard,
+        source_ip=source_ip,
+    )
+
+
+@qasync.asyncSlot(QtCore.QObject)
+async def _slotTacticalNodeAudioClicked(dashboard):
+    """Starts audio streaming on the selected Tactical node and opens the receiver."""
+    uid = dashboard.ui.label2_tactical_node_uuid.text().strip()
+
+    if not uid:
+        dashboard.logger.warning(
+            "[Tactical] No node selected for audio stream."
+        )
+        return
+
+    from fissure.Dashboard.Slots import MenuBarSlots
+
+    MenuBarSlots._slotMenuAudioStreamReceiverClicked(
+        dashboard
+    )
+
+    await asyncio.sleep(0.25)
+
+    parameters = {
+        "destination_port": 5502,
+        "sample_rate": 48000,
+        "channels": 2,
+        "bitrate_kbps": 32,
+    }
+
+    await dashboard.backend.tacticalNodeExecute(
+        [uid],
+        "Base",
+        "stream_audio",
+        parameters,
     )

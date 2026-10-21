@@ -25,6 +25,7 @@ import os
 import pickle
 import sys
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Union
 
 
@@ -172,11 +173,11 @@ def _safe_float(v: Any) -> float:
         return float("nan")
 
 
-def _find_model_file(models_folder: str, model_stem: str) -> Optional[str]:
-    """
-    Support both legacy naming and sane pickle naming.
-    Prefer .pkl/.pickle, but allow .h5 if that's how the repo is laid out.
-    """
+def _find_model_file(
+    models_folder: str,
+    model_stem: str,
+) -> Optional[str]:
+    """Resolve the persisted model file for a model sidecar."""
     candidates = [
         os.path.join(models_folder, model_stem + ".pkl"),
         os.path.join(models_folder, model_stem + ".pickle"),
@@ -198,11 +199,26 @@ class OperationMain(Operation):
         alert_callback=None,
         tak_cot_callback=None,
         status_callback=None,
+        artifact_manager=None,
+        source_id: str = "",
+        operation_id: str = "",
+        destination: str = "Local Results",
+        description: str = "",
+        input_source: str = "",
+        input_soi_id: str = "",
+        input_soi_key: str = "",
+        input_soi_frequency_mhz: Any = None,
+        source_artifact_id: str = "",
+        source_artifact_ids: Optional[List[str]] = None,
+        managed_input: Optional[Dict[str, Any]] = None,
+        features_path: str = "",
         folder: Optional[str] = None,
         models_folder: Optional[str] = None,
         features_file: str = "tsi_features.json",
-        min_models: int = 2,
+        min_models: int = 1,
         use_batch_consensus: Union[str, bool] = True,
+        selected_models: Optional[List[str]] = None,
+        library_candidates: Optional[List[Dict[str, Any]]] = None,
     ):
         super().__init__(
             node_uid=node_uid,
@@ -210,200 +226,387 @@ class OperationMain(Operation):
             alert_callback=alert_callback,
             tak_cot_callback=tak_cot_callback,
             status_callback=status_callback,
+            artifact_manager=artifact_manager,
         )
-
+        if operation_id:
+            self.opid = str(operation_id)
+        self.source_id = str(source_id or node_uid or "sensor_node")
+        self.destination = str(destination or "Local Results").strip()
+        self.description = str(description or "Classification analysis results").strip()
+        self.input_source = str(input_source or "").strip()
+        self.input_soi_id = str(input_soi_id or "").strip()
+        self.input_soi_key = str(input_soi_key or "").strip()
+        self.input_soi_frequency_mhz = input_soi_frequency_mhz
+        self.source_artifact_id = str(source_artifact_id or "").strip()
+        self.source_artifact_ids = [
+            str(value or "").strip()
+            for value in (source_artifact_ids or [])
+            if str(value or "").strip()
+        ]
+        self.managed_input = (
+            dict(managed_input)
+            if isinstance(managed_input, dict)
+            else {}
+        )
+        self.features_path = str(features_path or "").strip()
         self.folder = folder
         self.models_folder = _resolve_models_folder(models_folder)
-        self.features_file = features_file
+        self.features_file = str(features_file or "tsi_features.json")
         self.min_models = int(min_models)
         self.use_batch_consensus = _to_bool(use_batch_consensus, True)
+        self.selected_models = (
+            [
+                str(value or "").strip()
+                for value in selected_models
+                if str(value or "").strip()
+            ]
+            if isinstance(selected_models, list)
+            else None
+        )
+        self.library_candidates = [
+            dict(value)
+            for value in (library_candidates or [])
+            if isinstance(value, dict)
+        ]
+        self.artifact_id = ""
+        self.report_payload: Dict[str, Any] = {}
+
+    def _resolve_managed_features_path(self, managed_input: Dict[str, Any]) -> str:
+        if self.artifact_manager is None:
+            raise RuntimeError("Artifact manager unavailable for managed classifier input")
+
+        artifacts = managed_input.get("artifacts", []) if isinstance(managed_input, dict) else []
+        if not isinstance(artifacts, list):
+            artifacts = []
+
+        if not artifacts:
+            artifact_ids = managed_input.get("artifact_ids", []) if isinstance(managed_input, dict) else []
+            if not isinstance(artifact_ids, list):
+                artifact_ids = [artifact_ids]
+            artifacts = [
+                {"artifact_id": str(artifact_id or "").strip()}
+                for artifact_id in artifact_ids
+                if str(artifact_id or "").strip()
+            ]
+
+        for request in artifacts:
+            if not isinstance(request, dict):
+                continue
+
+            artifact_id = str(request.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+
+            artifact = self.artifact_manager.get_artifact(artifact_id)
+            if artifact is None:
+                continue
+
+            selected = request.get("selected_files", [])
+            if not isinstance(selected, list):
+                selected = []
+
+            requested_ids = {
+                str(item.get("file_id") or "").strip()
+                for item in selected
+                if isinstance(item, dict) and str(item.get("file_id") or "").strip()
+            }
+            requested_names = {
+                str(item.get("name") or "").strip()
+                for item in selected
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+            requested_roles = {
+                str(item.get("role") or "").strip()
+                for item in selected
+                if isinstance(item, dict) and str(item.get("role") or "").strip()
+            }
+            has_selection = bool(requested_ids or requested_names or requested_roles)
+
+            for artifact_file in artifact.files:
+                if has_selection:
+                    matches_selection = (
+                        artifact_file.id in requested_ids
+                        or artifact_file.name in requested_names
+                        or artifact_file.relative_path in requested_names
+                        or artifact_file.role in requested_roles
+                    )
+                    if not matches_selection:
+                        continue
+
+                if (
+                    artifact_file.name == self.features_file
+                    or os.path.basename(artifact_file.relative_path) == self.features_file
+                    or artifact_file.role == "feature_results"
+                ):
+                    path = self.artifact_manager.resolve_artifact_file_path(
+                        artifact_id,
+                        artifact_file.id,
+                    )
+                    if path and os.path.isfile(path):
+                        self.logger.info(
+                            "Resolved classifier Feature Analysis input: artifact_id=%s file=%s",
+                            artifact_id,
+                            artifact_file.name,
+                        )
+                        return path
+
+            for artifact_file in artifact.files:
+                if (
+                    artifact_file.name == self.features_file
+                    or os.path.basename(artifact_file.relative_path) == self.features_file
+                    or artifact_file.role == "feature_results"
+                ):
+                    path = self.artifact_manager.resolve_artifact_file_path(
+                        artifact_id,
+                        artifact_file.id,
+                    )
+                    if path and os.path.isfile(path):
+                        self.logger.info(
+                            "Resolved classifier Feature Analysis input: artifact_id=%s file=%s",
+                            artifact_id,
+                            artifact_file.name,
+                        )
+                        return path
+
+        raise FileNotFoundError(
+            "No tsi_features.json member found in selected Feature Analysis Artifact"
+        )
+    
+    def _resolve_paths(self, params: Dict[str, Any]) -> tuple:
+        managed_input = params.get("managed_input", self.managed_input)
+        managed_input = dict(managed_input) if isinstance(managed_input, dict) else {}
+        features_path = str(params.get("features_path", self.features_path) or "").strip()
+        folder = params.get("folder", self.folder)
+        features_file = str(params.get("features_file", self.features_file) or "tsi_features.json")
+
+        if managed_input:
+            features_path = self._resolve_managed_features_path(managed_input)
+        elif features_path:
+            features_path = os.path.abspath(features_path)
+        elif folder:
+            features_path = os.path.join(str(folder), features_file)
+        else:
+            raise ValueError("Classifier requires managed Artifact input, features_path, or folder")
+
+        legacy_in_place = bool(folder and not managed_input and not params.get("features_path") and not self.features_path)
+        if legacy_in_place:
+            output_folder = os.path.abspath(str(folder))
+        elif self.artifact_manager is not None:
+            _, output_folder = self.artifact_manager.create_operation_dir(self.opid)
+        else:
+            output_folder = os.path.dirname(features_path)
+        os.makedirs(output_folder, exist_ok=True)
+        return features_path, output_folder
 
     async def run(self) -> None:
         params: Dict[str, Any] = getattr(self, "parameters", {}) or {}
-
-        folder = params.get("folder", self.folder)
         models_folder = _resolve_models_folder(
             params.get("models_folder", self.models_folder)
         )
-        features_file = params.get("features_file", self.features_file)
         min_models = int(params.get("min_models", self.min_models))
         use_batch_consensus = _to_bool(
             params.get("use_batch_consensus", self.use_batch_consensus),
             True,
         )
+        destination = str(
+            params.get("destination", self.destination)
+            or "Local Results"
+        ).strip()
+        description = str(
+            params.get("description", self.description)
+            or "Classification analysis results"
+        ).strip()
+        library_candidates = params.get(
+            "library_candidates",
+            self.library_candidates,
+        )
+        library_candidates = (
+            [
+                dict(value)
+                for value in library_candidates
+                if isinstance(value, dict)
+            ]
+            if isinstance(library_candidates, list)
+            else []
+        )
+        source_artifact_ids = params.get(
+            "source_artifact_ids",
+            self.source_artifact_ids,
+        )
+        if not isinstance(source_artifact_ids, list):
+            source_artifact_ids = [source_artifact_ids]
+        source_artifact_ids = [
+            str(value or "").strip()
+            for value in source_artifact_ids
+            if str(value or "").strip()
+        ]
+
+        selected_models_value = params.get(
+            "selected_models",
+            self.selected_models,
+        )
+        if selected_models_value is None:
+            selected_model_set = None
+        else:
+            if not isinstance(selected_models_value, list):
+                selected_models_value = [selected_models_value]
+            selected_model_set = {
+                str(value or "").strip()
+                for value in selected_models_value
+                if str(value or "").strip()
+            }
+
+        started_at = time.time()
+
+        if destination not in {"Local Results", "Artifact"}:
+            raise ValueError(
+                f"Unsupported Classifier destination: {destination}"
+            )
+
+        features_path, output_folder = self._resolve_paths(params)
+        out_path = os.path.join(
+            output_folder,
+            "classification_report.json",
+        )
 
         if getattr(self, "status_callback", None):
             try:
-                await self.status_callback("Running: Classifying Features")
+                await self.status_callback(
+                    "Running: Classifying Features"
+                )
             except Exception:
-                self.logger.exception("status_callback failed: set running")
+                self.logger.exception(
+                    "status_callback failed: set running"
+                )
 
         if self._stop:
             return
 
-        if not folder or not isinstance(folder, str):
-            self.logger.warning("No folder provided to classifier op; nothing to do.")
-            return
-
-        os.makedirs(folder, exist_ok=True)
-
-        features_path = os.path.join(folder, features_file)
-        out_path = os.path.join(folder, "classification_report.json")
-
         if not os.path.isfile(features_path):
-            self.logger.warning(f"Missing features file: {features_path}")
             self._write_report(
                 out_path,
-                {
-                    "operation": "classify_features_dt_v1",
-                    "status": "skipped",
-                    "reason": "missing_features_file",
-                    "folder": folder,
-                    "models_folder": models_folder,
-                    "features_file": features_file,
-                    "features_path": features_path,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "per_file": [],
-                    "batch": {
-                        "label": None,
-                        "confidence": None,
-                        "files_used": 0,
-                        "vote_counts": {},
-                    },
-                },
+                self._base_report(
+                    "skipped",
+                    "missing_features_file",
+                    features_path,
+                    models_folder,
+                    min_models,
+                    use_batch_consensus,
+                    library_candidates,
+                    started_at,
+                ),
             )
             return
 
         try:
-            rows = _load_feature_rows(features_path)
-        except Exception as e:
-            self.logger.warning(f"Failed reading features file: {features_path}: {e!r}")
+            with open(features_path, "r", encoding="utf-8") as handle:
+                rows = json.load(handle)
+        except Exception as error:
             self._write_report(
                 out_path,
-                {
-                    "operation": "classify_features_dt_v1",
-                    "status": "skipped",
-                    "reason": "invalid_features_file",
-                    "error": repr(e),
-                    "folder": folder,
-                    "models_folder": models_folder,
-                    "features_file": features_file,
-                    "features_path": features_path,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "per_file": [],
-                    "batch": {
-                        "label": None,
-                        "confidence": None,
-                        "files_used": 0,
-                        "vote_counts": {},
-                    },
-                },
+                self._base_report(
+                    "skipped",
+                    f"invalid_features_file:{error!r}",
+                    features_path,
+                    models_folder,
+                    min_models,
+                    use_batch_consensus,
+                    library_candidates,
+                    started_at,
+                ),
             )
             return
 
-        if self._stop:
+        if not isinstance(rows, list):
+            self._write_report(
+                out_path,
+                self._base_report(
+                    "skipped",
+                    "features_file_not_list",
+                    features_path,
+                    models_folder,
+                    min_models,
+                    use_batch_consensus,
+                    library_candidates,
+                    started_at,
+                ),
+            )
             return
 
-        avail_features = set()
+        available_features = []
         for row in rows:
-            feats = row.get("features", {})
-            if isinstance(feats, dict):
-                avail_features |= set(feats.keys())
-
-        avail_features_list = sorted(avail_features)
-
-        if not models_folder or not os.path.isdir(models_folder):
-            self.logger.warning(f"Missing/invalid models_folder: {models_folder!r}")
-            self._write_report(
-                out_path,
-                {
-                    "operation": "classify_features_dt_v1",
-                    "status": "skipped",
-                    "reason": "missing_or_invalid_models_folder",
-                    "folder": folder,
-                    "models_folder": models_folder,
-                    "features_file": features_file,
-                    "features_path": features_path,
-                    "available_features": avail_features_list,
-                    "models_discovered": 0,
-                    "models_eligible_any": 0,
-                    "min_models": min_models,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "per_file": [],
-                    "batch": {
-                        "label": None,
-                        "confidence": None,
-                        "files_used": 0,
-                        "vote_counts": {},
-                    },
-                },
+            features = (
+                row.get("features", {})
+                if isinstance(row, dict)
+                else {}
             )
-            return
-
-        model_details: List[Dict[str, Any]] = []
-
-        for name in os.listdir(models_folder):
-            if self._stop:
-                return
-
-            if not name.lower().endswith(".txt"):
+            if not isinstance(features, dict):
                 continue
+            for name in features:
+                if name not in available_features:
+                    available_features.append(name)
+        available_features = sorted(available_features)
 
-            path = os.path.join(models_folder, name)
+        discovered_models: List[Dict[str, Any]] = []
+        if os.path.isdir(models_folder):
+            for name in sorted(os.listdir(models_folder), key=str.lower):
+                if self._stop:
+                    return
+                if not name.lower().endswith(".txt"):
+                    continue
 
-            try:
-                md = _read_model_details(path)
-                if md.get("technique") == "Decision Tree":
-                    model_details.append(md)
-            except Exception as e:
-                self.logger.warning(f"Failed reading model details {path}: {e!r}")
+                try:
+                    details = _read_model_details(
+                        os.path.join(models_folder, name)
+                    )
+                except Exception as error:
+                    self.logger.warning(
+                        f"Failed reading model details {name}: {error!r}"
+                    )
+                    continue
 
-        if not model_details:
-            self.logger.warning(f"No decision-tree model .txt files found in {models_folder}")
-            self._write_report(
-                out_path,
-                {
-                    "operation": "classify_features_dt_v1",
-                    "status": "skipped",
-                    "reason": "no_decision_tree_models_found",
-                    "folder": folder,
-                    "models_folder": models_folder,
-                    "features_file": features_file,
-                    "features_path": features_path,
-                    "available_features": avail_features_list,
-                    "models_discovered": 0,
-                    "models_eligible_any": 0,
-                    "min_models": min_models,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "per_file": [],
-                    "batch": {
-                        "label": None,
-                        "confidence": None,
-                        "files_used": 0,
-                        "vote_counts": {},
-                    },
-                },
-            )
-            return
+                if details.get("technique") != "Decision Tree":
+                    continue
 
-        eligible_any = _eligible_models(model_details, avail_features_list)
+                discovered_models.append(details)
 
-        if len(eligible_any) < min_models:
-            self.logger.warning(
-                f"Insufficient eligible models ({len(eligible_any)} < {min_models}). "
-                f"Available features: {len(avail_features_list)}"
-            )
+        if selected_model_set is None:
+            model_details = list(discovered_models)
+        else:
+            model_details = []
+            for details in discovered_models:
+                model_stem = os.path.splitext(
+                    os.path.basename(details.get("path") or "")
+                )[0]
+                if model_stem in selected_model_set:
+                    model_details.append(details)
 
+        selected_model_names = sorted(
+            os.path.splitext(
+                os.path.basename(details.get("path") or "")
+            )[0]
+            for details in model_details
+            if str(details.get("path") or "").strip()
+        )
+
+        eligible_any = _eligible_models(
+            model_details,
+            available_features,
+        )
         per_file: List[Dict[str, Any]] = []
 
         for row in rows:
             if self._stop:
                 return
 
-            file_name = row.get("file")
-            feats = row.get("features", {})
+            file_name = row.get("file") if isinstance(row, dict) else ""
+            features = (
+                row.get("features", {})
+                if isinstance(row, dict)
+                else {}
+            )
 
-            if not isinstance(feats, dict) or not feats:
+            if not isinstance(features, dict) or not features:
                 per_file.append(
                     {
                         "file": file_name,
@@ -411,42 +614,47 @@ class OperationMain(Operation):
                         "models_used": 0,
                         "votes": {},
                         "vote_counts": {},
-                        "consensus": {"label": None, "confidence": None},
+                        "consensus": {
+                            "label": None,
+                            "confidence": None,
+                        },
                         "skipped": [],
                     }
                 )
                 continue
 
-            file_avail = sorted(feats.keys())
-            file_eligible = _eligible_models(model_details, file_avail)
-
+            file_eligible = _eligible_models(
+                model_details,
+                sorted(features.keys()),
+            )
             votes: Dict[str, str] = {}
             skipped: List[Dict[str, Any]] = []
 
-            for md in file_eligible:
+            for details in file_eligible:
                 if self._stop:
                     return
 
-                model_stem = os.path.splitext(os.path.basename(md["path"]))[0]
-                model_path = _find_model_file(models_folder, model_stem)
-
+                model_stem = os.path.splitext(
+                    os.path.basename(details["path"])
+                )[0]
+                model_path = _find_model_file(
+                    models_folder,
+                    model_stem,
+                )
                 if not model_path:
                     skipped.append(
                         {
                             "model": model_stem,
                             "reason": "missing_model_file",
-                            "expected_one_of": [
-                                f"{model_stem}.pkl",
-                                f"{model_stem}.pickle",
-                                f"{model_stem}.h5",
-                            ],
                         }
                     )
                     continue
 
-                req_feats = md.get("features", [])
-
-                if not isinstance(req_feats, list) or not req_feats:
+                required_features = details.get("features", [])
+                if (
+                    not isinstance(required_features, list)
+                    or not required_features
+                ):
                     skipped.append(
                         {
                             "model": model_stem,
@@ -455,24 +663,26 @@ class OperationMain(Operation):
                     )
                     continue
 
-                x = np.array(
-                    [[_safe_float(feats.get(feature)) for feature in req_feats]],
+                values = np.array(
+                    [[
+                        _safe_float(features.get(feature))
+                        for feature in required_features
+                    ]],
                     dtype=np.float64,
                 )
 
                 try:
-                    with open(model_path, "rb") as f:
-                        clf = pickle.load(f)
-
-                    y_pred = clf.predict(x)
-                    votes[model_stem] = str(y_pred[0])
-
-                except Exception as e:
+                    with open(model_path, "rb") as handle:
+                        classifier = pickle.load(handle)
+                    votes[model_stem] = str(
+                        classifier.predict(values)[0]
+                    )
+                except Exception as error:
                     skipped.append(
                         {
                             "model": model_stem,
                             "reason": "predict_failed",
-                            "error": repr(e),
+                            "error": repr(error),
                         }
                     )
 
@@ -480,15 +690,20 @@ class OperationMain(Operation):
             for label in votes.values():
                 vote_counts[label] = vote_counts.get(label, 0) + 1
 
+            models_used = len(votes)
             if vote_counts:
-                best_label = max(vote_counts.items(), key=lambda kv: kv[1])[0]
-                models_used = len(votes)
-                best_votes = vote_counts[best_label]
-                confidence = best_votes / models_used if models_used > 0 else None
+                best_label, best_votes = max(
+                    vote_counts.items(),
+                    key=lambda item: item[1],
+                )
+                confidence = (
+                    best_votes / models_used
+                    if models_used
+                    else None
+                )
             else:
                 best_label = None
                 confidence = None
-                models_used = 0
 
             per_file.append(
                 {
@@ -515,24 +730,28 @@ class OperationMain(Operation):
             batch_counts: Dict[str, int] = {}
             used_files = 0
 
-            for pf in per_file:
-                if self._stop:
-                    return
-
-                lbl = pf.get("consensus", {}).get("label")
-
-                if lbl:
-                    batch_counts[lbl] = batch_counts.get(lbl, 0) + 1
-                    used_files += 1
+            for per_file_result in per_file:
+                label = per_file_result.get(
+                    "consensus",
+                    {},
+                ).get("label")
+                if not label:
+                    continue
+                batch_counts[label] = batch_counts.get(label, 0) + 1
+                used_files += 1
 
             if batch_counts:
-                batch_label = max(batch_counts.items(), key=lambda kv: kv[1])[0]
-                batch_votes = batch_counts[batch_label]
-                batch_conf = batch_votes / used_files if used_files > 0 else None
-
+                batch_label, batch_votes = max(
+                    batch_counts.items(),
+                    key=lambda item: item[1],
+                )
                 batch = {
                     "label": batch_label,
-                    "confidence": batch_conf,
+                    "confidence": (
+                        batch_votes / used_files
+                        if used_files
+                        else None
+                    ),
                     "files_used": used_files,
                     "vote_counts": batch_counts,
                 }
@@ -540,9 +759,15 @@ class OperationMain(Operation):
         if self._stop:
             return
 
-        models_used_total = sum(int(pf.get("models_used", 0)) for pf in per_file)
+        models_used_total = sum(
+            int(result.get("models_used", 0))
+            for result in per_file
+        )
 
-        if batch.get("label"):
+        if selected_model_set is not None and not selected_model_names:
+            status = "unclassified"
+            reason = "no_models_selected"
+        elif batch.get("label"):
             status = "classified"
             reason = ""
         elif models_used_total > 0:
@@ -555,30 +780,127 @@ class OperationMain(Operation):
             status = "unclassified"
             reason = "no_model_votes"
 
+        completed_at = time.time()
+        reserved_artifact_id = (
+            str(uuid.uuid4())
+            if destination == "Artifact"
+            else ""
+        )
         report = {
-            "operation": "classify_features_dt_v1",
+            "operation": "classify_features_dt_v2",
+            "workflow": "classifier",
+            "kind": "classification_analysis",
+            "role": "classification_analysis_v1",
             "status": status,
             "reason": reason,
-            "folder": folder,
+            "node_uid": str(
+                params.get("node_uid")
+                or self.node_uid
+                or ""
+            ),
+            "source_id": str(
+                params.get("source_id")
+                or self.source_id
+                or ""
+            ),
+            "operation_id": self.opid,
+            "destination": destination,
+            "description": description,
+            "input_source": str(
+                params.get("input_source", self.input_source)
+                or ""
+            ),
+            "input_soi_id": str(
+                params.get("input_soi_id", self.input_soi_id)
+                or ""
+            ),
+            "input_soi_key": str(
+                params.get("input_soi_key", self.input_soi_key)
+                or ""
+            ),
+            "input_soi_frequency_mhz": params.get(
+                "input_soi_frequency_mhz",
+                self.input_soi_frequency_mhz,
+            ),
+            "source_artifact_id": (
+                source_artifact_ids[0]
+                if len(source_artifact_ids) == 1
+                else ""
+            ),
+            "source_artifact_ids": source_artifact_ids,
+            "features_file": os.path.basename(features_path),
+            "available_features": available_features,
             "models_folder": models_folder,
-            "features_file": features_file,
-            "features_path": features_path,
-            "available_features": avail_features_list,
-            "models_discovered": len(model_details),
+            "models_discovered": len(discovered_models),
+            "models_selected": selected_model_names,
+            "models_selected_count": len(selected_model_names),
             "models_eligible_any": len(eligible_any),
             "min_models": min_models,
             "use_batch_consensus": use_batch_consensus,
             "per_file": per_file,
             "batch": batch,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "library_candidates": library_candidates,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_s": max(0.0, completed_at - started_at),
+            "artifact_id": reserved_artifact_id,
+            "created_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(),
+            ),
         }
-
-        self._write_report(out_path, report)
-
-        self.logger.info(
-            f"DT batch: status={status}, label={batch.get('label')}, "
-            f"confidence={batch.get('confidence')}, report={out_path}"
+        self._write_report(
+            out_path,
+            report,
         )
+
+        if destination == "Artifact":
+            if self.artifact_manager is None:
+                raise RuntimeError(
+                    "Artifact manager unavailable for Classification Artifact output"
+                )
+
+            relations = [
+                ("artifact", artifact_id, "derived_from")
+                for artifact_id in source_artifact_ids
+            ]
+            artifact_id = self.artifact_manager.create_artifact(
+                source_id=str(
+                    params.get("source_id")
+                    or self.source_id
+                    or self.node_uid
+                    or "sensor_node"
+                ),
+                operation_id=self.opid,
+                files=[out_path],
+                name=description or "Classification Analysis",
+                artifact_type="classification_analysis",
+                metadata=report,
+                relations=relations,
+                file_metadata={
+                    out_path: {
+                        "role": "classification_results",
+                        "content_type": "application/json",
+                    }
+                },
+                artifact_id=reserved_artifact_id,
+            )
+            self.artifact_id = str(
+                getattr(artifact_id, "id", artifact_id)
+                or reserved_artifact_id
+            )
+
+        self.report_payload = report
+        
+    def _base_report(self, status: str, reason: str, features_path: str, models_folder: str, min_models: int, use_batch_consensus: bool, library_candidates: list, started_at: float) -> Dict[str, Any]:
+        return {
+            "operation": "classify_features_dt_v2", "workflow": "classifier", "kind": "classification_analysis",
+            "status": status, "reason": reason, "operation_id": self.opid, "features_path": features_path,
+            "models_folder": models_folder, "models_discovered": 0, "models_eligible_any": 0, "min_models": min_models,
+            "use_batch_consensus": use_batch_consensus, "library_candidates": library_candidates, "per_file": [],
+            "batch": {"label": None, "confidence": None, "files_used": 0, "vote_counts": {}},
+            "started_at": started_at, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
 
     def _write_report(self, out_path: str, report: Dict[str, Any]) -> None:
         try:

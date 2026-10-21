@@ -17,8 +17,6 @@ PLUGIN_NAME = "Base"
 
 
 ACTION_TAGS = {
-    "signal_geolocate": ["All"],
-
     "fixed_detection": [
         "All",
         "tsi.detector",
@@ -59,6 +57,7 @@ ACTION_TAGS = {
     "iq_record": [
         "All",
         "iq.record",
+        "sa.capture",
     ],
     "iq_playback": [
         "All",
@@ -68,9 +67,11 @@ ACTION_TAGS = {
         "All",
         "iq.inspection",
         "iq.inspection.source.radio",
+        "sa.survey",
         "tactical.inspection",
         "client.dashboard",
         "node.local",
+        "node.remote",
     ],
     "iq_inspection_file": [
         "All",
@@ -80,10 +81,35 @@ ACTION_TAGS = {
         "node.local",
     ],
 
+    "iq_basic_analysis": [
+        "All",
+        "sa.inspection",
+        "client.dashboard",
+        "node.local",
+    ],
+    "ook_analysis": [
+        "All",
+        "sa.inspection",
+        "client.dashboard",
+        "node.local",
+    ],
+
     "promote_to_soi": ["All"],
 
     "take_photo": ["All"],
     "take_video": ["All"],
+    "stream_video": [
+        "All",
+        "media.stream",
+        "media.video",
+        "tactical.video",
+    ],
+    "stream_audio": [
+        "All",
+        "media.stream",
+        "media.audio",
+        "tactical.audio",
+    ],
 
     "signal_conditioning": [
         "All",
@@ -96,15 +122,19 @@ ACTION_TAGS = {
         "All",
         "tsi.conditioner",
         "tsi.conditioner.category.energy",
-        "tsi.conditioner.method.normal",
         "tsi.conditioner.method.normal_decay",
-        "tsi.conditioner.method.power_squelch",
-        "tsi.conditioner.method.lowpass",
-        "tsi.conditioner.method.power_squelch_lowpass",
-        "tsi.conditioner.method.bandpass",
-        "tsi.conditioner.method.strongest_frequency_bandpass",
         "tsi.conditioner.source.file",
         "tsi.conditioner.source.folder",
+        "tsi.conditioner.source.artifact",
+    ],
+    "signal_conditioning_file_power_squelch": [
+        "All",
+        "tsi.conditioner",
+        "tsi.conditioner.category.energy",
+        "tsi.conditioner.method.power_squelch",
+        "tsi.conditioner.source.file",
+        "tsi.conditioner.source.folder",
+        "tsi.conditioner.source.artifact",
     ],
     "feature_extract_time_domain": [
         "All",
@@ -113,6 +143,7 @@ ACTION_TAGS = {
         "tsi.feature_extractor.profile.all_available",
         "tsi.feature_extractor.source.file",
         "tsi.feature_extractor.source.folder",
+        "tsi.feature_extractor.source.artifact",        
     ],
     "feature_extract_frequency_domain": [
         "All",
@@ -121,6 +152,7 @@ ACTION_TAGS = {
         "tsi.feature_extractor.profile.all_available",
         "tsi.feature_extractor.source.file",
         "tsi.feature_extractor.source.folder",
+        "tsi.feature_extractor.source.artifact",        
     ],
     "feature_extract_time_frequency": [
         "All",
@@ -129,6 +161,7 @@ ACTION_TAGS = {
         "tsi.feature_extractor.profile.all_available",
         "tsi.feature_extractor.source.file",
         "tsi.feature_extractor.source.folder",
+        "tsi.feature_extractor.source.artifact",        
     ],
     "feature_extract_custom": [
         "All",
@@ -137,7 +170,15 @@ ACTION_TAGS = {
         "tsi.feature_extractor.profile.all_available",
         "tsi.feature_extractor.source.file",
         "tsi.feature_extractor.source.folder",
+        "tsi.feature_extractor.source.artifact",        
     ],
+    "classify_features_dt": [
+        "All",
+        "tsi.classifier",
+        "tsi.classifier.method.model",
+        "tsi.classifier.source.artifact",
+        "tsi.classifier.source.local_file",
+    ],    
     "sensor_node_time": [
         "All",
         "tsi.detector",
@@ -246,13 +287,17 @@ ACTION_TAGS = {
         "tsi.detector.type.network",
         "tsi.detector.mode.request",
     ],
+    "scapy_transmit": [
+        "All",
+        "scapy.transmit",
+        "packet.transmit",
+    ],
 }
 
 
 ACTION_HARDWARE = {
     "hackrf_sweep_detection": ["HackRF"],
     "rtl_power_detection": ["RTL2832U"],
-    "signal_geolocate": ["USRP B20xmini", "USRP B2x0"],
     "fixed_detection": ["USRP B20xmini", "USRP B2x0"],
     "scan_detection": ["USRP B20xmini", "USRP B2x0"],
     "lfm_beacon_detection": ["RTL2832U"],
@@ -328,7 +373,6 @@ sensor_node_time_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Sensor Node time reached"},
     ]
 }
-
 async def sensor_node_time(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Sensor Node time action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "sensor_node_time.py", parameters, node_uid, wait=True)
@@ -340,7 +384,6 @@ timer_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Timer expired"},
     ]
 }
-
 async def timer(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Timer action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "timer.py", parameters, node_uid, wait=True)
@@ -355,7 +398,6 @@ sound_threshold_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Sound threshold exceeded"},
     ]
 }
-
 async def sound_threshold(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Sound threshold action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "sound_threshold.py", parameters, node_uid, wait=True)
@@ -368,7 +410,6 @@ file_modified_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "File modified"},
     ]
 }
-
 async def file_modified(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"File modified action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "file_modified.py", parameters, node_uid, wait=True)
@@ -381,7 +422,6 @@ folder_modified_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Folder modified"},
     ]
 }
-
 async def folder_modified(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Folder modified action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "folder_modified.py", parameters, node_uid, wait=True)
@@ -398,7 +438,6 @@ temperature_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Temperature condition met"},
     ]
 }
-
 async def temperature(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Temperature action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "temperature.py", parameters, node_uid, wait=True)
@@ -414,7 +453,6 @@ weather_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Weather condition met"},
     ]
 }
-
 async def weather(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Weather action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "weather.py", parameters, node_uid, wait=True)
@@ -430,7 +468,6 @@ wind_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Wind threshold reached"},
     ]
 }
-
 async def wind(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Wind action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "wind.py", parameters, node_uid, wait=True)
@@ -446,7 +483,6 @@ sunrise_sunset_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Sunrise/sunset reached"},
     ]
 }
-
 async def sunrise_sunset(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Sunrise/sunset action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "sunrise_sunset.py", parameters, node_uid, wait=True)
@@ -460,7 +496,6 @@ detect_ssid_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "SSID detected"},
     ]
 }
-
 async def detect_ssid(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Detect SSID action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "detect_ssid.py", parameters, node_uid, wait=True)
@@ -475,7 +510,6 @@ gps_point_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "GPS point reached"},
     ]
 }
-
 async def gps_point(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"GPS point action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "gps_point.py", parameters, node_uid, wait=True)
@@ -490,7 +524,6 @@ gps_line_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "GPS line crossed"},
     ]
 }
-
 async def gps_line(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"GPS line action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "gps_line.py", parameters, node_uid, wait=True)
@@ -502,7 +535,6 @@ x10_demod_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "X10 message detected"},
     ]
 }
-
 async def x10_demod(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"X10 demod action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "x10_demod.py", parameters, node_uid, wait=True)
@@ -514,7 +546,6 @@ plane_spotting_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Aircraft detected"},
     ]
 }
-
 async def plane_spotting(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Plane spotting action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "plane_spotting.py", parameters, node_uid, wait=True)
@@ -527,7 +558,6 @@ rds_keyword_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "RDS keyword detected"},
     ]
 }
-
 async def rds_keyword(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"RDS keyword action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "rds_keyword.py", parameters, node_uid, wait=True)
@@ -541,7 +571,6 @@ cellular_tower_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Cellular tower detected"},
     ]
 }
-
 async def cellular_tower(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Cellular tower action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "cellular_tower.py", parameters, node_uid, wait=True)
@@ -554,30 +583,9 @@ webserver_curl_schema = {
         {"name": "description", "label": "Description", "type": "string", "default": "Web request received"},
     ]
 }
-
 async def webserver_curl(component: SensorNode, parameters: Dict[str, Any], node_uid: str = "") -> None:
     component.logger.info(f"Webserver curl action with parameters: {parameters}")
     await component.run_plugin_operation(component, PLUGIN_NAME, "webserver_curl.py", parameters, node_uid, wait=True)
-
-
-async def signal_geolocate(
-    component: SensorNode,
-    parameters: Dict[str, Any],
-    node_uid: str = "",
-) -> None:
-    component.logger.info(
-        f"Signal geolocation with parameters: {parameters}"
-    )
-
-    op_params = dict(parameters or {})
-
-    await component.run_plugin_operation(
-        component,
-        PLUGIN_NAME,
-        "signal_geolocate.py",
-        {"parameters": op_params},
-        node_uid,
-    )
 
 
 fixed_detection_schema = {
@@ -630,7 +638,7 @@ fixed_detection_schema = {
             "name": "run_mode",
             "label": "Run Mode",
             "type": "string",
-            "default": "headless",
+            "default": "gui",
             "options": ["headless", "gui"],
         },
         {
@@ -977,6 +985,11 @@ async def lfm_beacon_geolocate(
     )
 
     op_params = dict(parameters or {})
+    op_params.setdefault("gain_default", 40.0)
+    op_params.setdefault(
+        "source_id",
+        node_uid or getattr(component, "uuid", "") or "sensor_node",
+    )
 
     await component.run_plugin_operation(
         component,
@@ -1043,7 +1056,6 @@ usrp_b2x0_geolocate_schema = {
         },
     ]
 }
-
 async def usrp_b2x0_geolocate(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -1279,10 +1291,7 @@ signal_conditioning_file_schema = {
             "label": "Data Type",
             "type": "string",
             "default": "Complex Float 32",
-            "options": [
-                "Complex Float 32",
-                "Complex Int 16",
-            ],
+            "options": ["Complex Float 32", "Complex Int 16"],
         },
         {
             "name": "sample_rate",
@@ -1336,7 +1345,7 @@ signal_conditioning_file_schema = {
             "name": "description",
             "label": "Description",
             "type": "string",
-            "default": "Local file/folder signal conditioning using file-source Conditioner flow graphs",
+            "default": "Normal Decay file/folder conditioning",
         },
     ]
 }
@@ -1350,7 +1359,7 @@ async def signal_conditioning_file(
     )
 
     op_params = dict(parameters or {})
-
+    op_params["method"] = "normal_decay"
     op_params.setdefault(
         "source_id",
         node_uid or getattr(component, "uuid", "") or "sensor_node",
@@ -1365,6 +1374,96 @@ async def signal_conditioning_file(
         wait=True,
     )
 
+
+signal_conditioning_file_power_squelch_schema = {
+    "params": [
+        {
+            "name": "data_type",
+            "label": "Data Type",
+            "type": "string",
+            "default": "Complex Float 32",
+            "options": ["Complex Float 32", "Complex Int 16"],
+        },
+        {
+            "name": "sample_rate",
+            "label": "Sample Rate (S/s)",
+            "type": "number",
+            "default": 1000000.0,
+            "min": 1.0,
+            "max": 100000000.0,
+            "step": 100000.0,
+            "decimals": 0,
+        },
+        {
+            "name": "squelch",
+            "label": "Squelch (dB)",
+            "type": "number",
+            "default": -70.0,
+            "min": -200.0,
+            "max": 0.0,
+            "step": 1.0,
+            "decimals": 1,
+        },
+        {
+            "name": "threshold",
+            "label": "Threshold",
+            "type": "number",
+            "default": 0.002,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.001,
+            "decimals": 6,
+        },
+        {
+            "name": "max_files",
+            "label": "Max Files",
+            "type": "int",
+            "default": 15,
+            "min": 1,
+            "max": 9999,
+            "step": 1,
+        },
+        {
+            "name": "min_samples",
+            "label": "Min Samples",
+            "type": "int",
+            "default": 1,
+            "min": 0,
+            "max": 100000000,
+            "step": 1,
+        },
+        {
+            "name": "description",
+            "label": "Description",
+            "type": "string",
+            "default": "Power Squelch file/folder conditioning",
+        },
+    ]
+}
+async def signal_conditioning_file_power_squelch(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+    component.logger.info(
+        f"Signal Conditioning Power Squelch action with parameters: {parameters}"
+    )
+
+    op_params = dict(parameters or {})
+    op_params["method"] = "power_squelch"
+    op_params.setdefault(
+        "source_id",
+        node_uid or getattr(component, "uuid", "") or "sensor_node",
+    )
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "signal_conditioning_file.py",
+        op_params,
+        node_uid,
+        wait=True,
+    )
 
 
 feature_extract_time_domain_schema = {
@@ -1704,6 +1803,125 @@ async def feature_extract_custom(
         component,
         PLUGIN_NAME,
         "feature_extraction.py",
+        op_params,
+        node_uid,
+        wait=True,
+    )
+
+classify_features_dt_schema = {
+    "params": [
+        {
+            "name": "model_example",
+            "label": "example",
+            "type": "bool",
+            "default": True,
+            "group": "Models",
+            "required_features": [
+                "Crest Factor",
+                "Kurtosis of Band Power",
+                "Margin",
+                "Relative Spectral Peak per Band",
+                "Skewness of Band Power",
+                "Sum of Total Band Power",
+                "Power",
+                "Pulse Indicator",
+                "Standard Deviation of Band Power",
+            ],
+        },
+        {
+            "name": "model_example_frequency",
+            "label": "example_frequency",
+            "type": "bool",
+            "default": True,
+            "group": "Models",
+            "required_features": [
+                "Kurtosis of Band Power",
+                "Relative Spectral Peak per Band",
+                "Skewness of Band Power",
+                "Sum of Total Band Power",
+                "Mean of Band Power Spectrum",
+                "Peak of Band Power",
+                "Variance of Band Power",
+            ],
+        },
+        {
+            "name": "model_example_time",
+            "label": "example_time",
+            "type": "bool",
+            "default": True,
+            "group": "Models",
+            "required_features": [
+                "Crest Factor",
+                "Margin",
+                "Kurtosis",
+                "RMS",
+                "Samples",
+                "Standard Deviation",
+                "Zero Crossings",
+            ],
+        },
+        {
+            "name": "description",
+            "label": "Description",
+            "type": "string",
+            "default": "Classification analysis results",
+        },
+    ]
+}
+async def classify_features_dt(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+    """Classify Feature Analysis results with packaged Decision Tree models."""
+    op_params = dict(parameters or {})
+
+    model_parameters = {
+        "model_example": "example",
+        "model_example_frequency": "example_frequency",
+        "model_example_time": "example_time",
+    }
+    explicit_model_selection = any(
+        name in op_params
+        for name in model_parameters
+    )
+
+    if explicit_model_selection:
+        selected_models = []
+
+        for parameter_name, model_name in model_parameters.items():
+            value = op_params.pop(parameter_name, True)
+
+            if isinstance(value, str):
+                enabled = value.strip().lower() in {
+                    "true",
+                    "1",
+                    "yes",
+                    "y",
+                    "on",
+                    "enabled",
+                }
+            else:
+                enabled = bool(value)
+
+            if enabled:
+                selected_models.append(model_name)
+
+        op_params["selected_models"] = selected_models
+
+    op_params.setdefault(
+        "source_id",
+        node_uid or getattr(component, "uuid", "") or "sensor_node",
+    )
+    op_params.setdefault("destination", "Artifact")
+    op_params.setdefault("features_file", "tsi_features.json")
+    op_params.setdefault("min_models", 1)
+    op_params.setdefault("use_batch_consensus", True)
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "classify_features_dt.py",
         op_params,
         node_uid,
         wait=True,
@@ -2197,7 +2415,6 @@ take_video_schema = {
         },
     ]
 }
-
 async def take_video(
     component: SensorNode,
     parameters: Dict[str, Any],
@@ -2225,6 +2442,144 @@ async def take_video(
     )
 
 
+stream_video_schema = {
+    "params": [
+        {
+            "name": "rtsp_port",
+            "label": "RTSP Port",
+            "type": "number",
+            "default": 8554,
+        },
+        {
+            "name": "device",
+            "label": "Video Device",
+            "type": "string",
+            "default": "/dev/video0",
+        },
+        {
+            "name": "source_format",
+            "label": "Source Format",
+            "type": "string",
+            "default": "YUY2",
+            "options": ["YUY2", "MJPG"],
+        },
+        {
+            "name": "width",
+            "label": "Width",
+            "type": "number",
+            "default": 640,
+        },
+        {
+            "name": "height",
+            "label": "Height",
+            "type": "number",
+            "default": 480,
+        },
+        {
+            "name": "fps",
+            "label": "FPS",
+            "type": "number",
+            "default": 30,
+        },
+        {
+            "name": "bitrate_kbps",
+            "label": "Bitrate (kbps)",
+            "type": "number",
+            "default": 750,
+        },
+    ]
+}
+async def stream_video(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+
+    component.logger.info(
+        f"stream_video action with parameters: {parameters}"
+    )
+
+    op_params = dict(parameters or {})
+    op_params.setdefault(
+        "operation_id",
+        str(uuid.uuid4()),
+    )
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "stream_video.py",
+        op_params,
+        node_uid,
+        wait=True,
+    )
+
+
+stream_audio_schema = {
+    "params": [
+        {
+            "name": "destination_port",
+            "label": "Destination Port",
+            "type": "number",
+            "default": 5502,
+        },
+        {
+            "name": "sample_rate",
+            "label": "Sample Rate (Hz)",
+            "type": "number",
+            "default": 48000,
+        },
+        {
+            "name": "channels",
+            "label": "Channels",
+            "type": "number",
+            "default": 2,
+        },
+        {
+            "name": "bitrate_kbps",
+            "label": "Bitrate (kbps)",
+            "type": "number",
+            "default": 32,
+        },
+    ]
+}
+async def stream_audio(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+
+    component.logger.info(
+        f"stream_audio action with parameters: {parameters}"
+    )
+
+    destination_ip = str(
+        getattr(component, "hiprfisr_ip_address", "") or ""
+    ).strip()
+
+    if destination_ip.lower() == "ipc":
+        destination_ip = "127.0.0.1"
+
+    if not destination_ip:
+        raise ValueError("HIPRFISR IP address is not configured")
+
+    op_params = dict(parameters or {})
+    op_params["destination_ip"] = destination_ip
+    op_params.setdefault(
+        "operation_id",
+        str(uuid.uuid4()),
+    )
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "stream_audio.py",
+        op_params,
+        node_uid,
+        wait=True,
+    )
+
+
 iq_record_schema = {
     "params": [
         {
@@ -2235,7 +2590,7 @@ iq_record_schema = {
         },
         {
             "name": "artifact_format",
-            "label": "Artifact Format",
+            "label": "Artifact Packaging",
             "type": "string",
             "default": "raw",
             "options": ["raw", "zip"],
@@ -2271,22 +2626,29 @@ iq_record_schema = {
             "default": "TX/RX",
         },
         {
-            "name": "file_length",
-            "label": "File Length",
+            "name": "duration_s",
+            "label": "Duration per Capture (s)",
             "type": "number",
-            "default": 100000,
+            "default": 0.1,
+            "min": 0.001,
+            "step": 0.1,
+            "decimals": 3,
         },
         {
             "name": "number_of_files",
-            "label": "Number of Files",
-            "type": "number",
+            "label": "Number of Captures",
+            "type": "int",
             "default": 1,
+            "min": 1,
         },
         {
             "name": "file_interval",
-            "label": "File Interval (s)",
+            "label": "Interval Between Captures (s)",
             "type": "number",
             "default": 0.0,
+            "min": 0.0,
+            "step": 0.1,
+            "decimals": 3,
         },
         {
             "name": "data_type",
@@ -2297,7 +2659,7 @@ iq_record_schema = {
         },
         {
             "name": "sigmf_enabled",
-            "label": "SigMF Enabled",
+            "label": "SigMF Metadata",
             "type": "string",
             "default": "true",
             "options": ["true", "false"],
@@ -2723,6 +3085,245 @@ async def iq_inspection_file(
         component,
         PLUGIN_NAME,
         "iq_inspection_file.py",
+        op_params,
+        node_uid,
+    )
+
+
+iq_basic_analysis_schema = {
+    "params": [
+        {
+            "name": "max_samples",
+            "label": "Max Samples",
+            "type": "integer",
+            "default": 1000000,
+            "min": 1000,
+            "max": 10000000,
+            "step": 1000,
+            "description": "Maximum samples used for the basic statistics calculation.",
+        },
+    ]
+}
+async def iq_basic_analysis(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+    """Run basic IQ analysis against the active Inspection evidence/range."""
+    parameters = dict(parameters or {})
+    context = parameters.get("_fissure_inspection_context", {})
+    if not isinstance(context, dict):
+        context = {}
+
+    filepath = str(context.get("filepath") or "").strip()
+    if not filepath:
+        raise ValueError("Inspection context did not provide a local IQ filepath.")
+
+    op_params = {
+        "operation_id": str(parameters.get("operation_id") or ""),
+        "filepath": filepath,
+        "data_type": str(context.get("data_type") or "Complex Float 32"),
+        "sigmf_datatype": str(context.get("sigmf_datatype") or ""),
+        "sample_rate_hz": float(context.get("sample_rate_hz") or 0.0),
+        "center_frequency_hz": float(context.get("center_frequency_hz") or 0.0),
+        "sample_count": int(context.get("sample_count") or 0),
+        "start_sample": int(context.get("start_sample") or 0),
+        "end_sample": int(context.get("end_sample") or 0),
+        "max_samples": int(parameters.get("max_samples") or 1000000),
+    }
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "iq_basic_analysis.py",
+        op_params,
+        node_uid,
+    )
+
+
+ook_analysis_schema = {
+    "params": [
+        {
+            "name": "threshold",
+            "label": "Magnitude Threshold",
+            "type": "number",
+            "default": 0.0,
+            "min": 0.0,
+            "step": 0.01,
+            "decimals": 6,
+            "description": "0 uses automatic magnitude threshold detection.",
+        },
+        {
+            "name": "min_pulse_us",
+            "label": "Min Pulse Width (us)",
+            "type": "number",
+            "default": 50.0,
+            "min": 0.0,
+            "step": 10.0,
+            "decimals": 3,
+        },
+        {
+            "name": "merge_gap_us",
+            "label": "Merge Gap (us)",
+            "type": "number",
+            "default": 20.0,
+            "min": 0.0,
+            "step": 5.0,
+            "decimals": 3,
+        },
+        {
+            "name": "burst_gap_us",
+            "label": "Burst Gap (us)",
+            "type": "number",
+            "default": 2000.0,
+            "min": 1.0,
+            "step": 100.0,
+            "decimals": 3,
+        },
+        {
+            "name": "max_samples",
+            "label": "Max Samples",
+            "type": "integer",
+            "default": 10000000,
+            "min": 1000,
+            "max": 50000000,
+            "step": 1000,
+            "description": "Maximum full-rate samples used for pulse timing.",
+        },
+    ]
+}
+async def ook_analysis(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+    """Measure OOK pulse widths against the active Inspection evidence/range."""
+    parameters = dict(parameters or {})
+    context = parameters.get("_fissure_inspection_context", {})
+    if not isinstance(context, dict):
+        context = {}
+
+    filepath = str(context.get("filepath") or "").strip()
+    if not filepath:
+        raise ValueError("Inspection context did not provide a local IQ filepath.")
+
+    op_params = {
+        "operation_id": str(parameters.get("operation_id") or ""),
+        "filepath": filepath,
+        "data_type": str(context.get("data_type") or "Complex Float 32"),
+        "sigmf_datatype": str(context.get("sigmf_datatype") or ""),
+        "sample_rate_hz": float(context.get("sample_rate_hz") or 0.0),
+        "center_frequency_hz": float(context.get("center_frequency_hz") or 0.0),
+        "sample_count": int(context.get("sample_count") or 0),
+        "start_sample": int(context.get("start_sample") or 0),
+        "end_sample": int(context.get("end_sample") or 0),
+        "threshold": float(parameters.get("threshold") or 0.0),
+        "min_pulse_us": float(parameters.get("min_pulse_us") or 50.0),
+        "merge_gap_us": float(parameters.get("merge_gap_us") or 20.0),
+        "burst_gap_us": float(parameters.get("burst_gap_us") or 2000.0),
+        "max_samples": int(parameters.get("max_samples") or 10000000),
+    }
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "ook_analysis.py",
+        op_params,
+        node_uid,
+    )
+
+
+scapy_transmit_schema = {
+    "params": [
+        {
+            "name": "packet_hex",
+            "label": "Packet Hex",
+            "type": "string",
+            "default": "",
+            "description": "Serialized packet bytes as hexadecimal.",
+        },
+        {
+            "name": "root_layer",
+            "label": "Root Layer",
+            "type": "string",
+            "default": "Ether",
+            "description": "Scapy class used to rebuild the packet, such as Ether, RadioTap, or IP.",
+        },
+        {
+            "name": "interface",
+            "label": "Interface",
+            "type": "string",
+            "default": "",
+            "description": "Network interface on the executing Sensor Node.",
+        },
+        {
+            "name": "method",
+            "label": "Method",
+            "type": "string",
+            "default": "Auto",
+            "options": [
+                "Auto",
+                "sendp (Layer 2)",
+                "send (Layer 3)",
+            ],
+        },
+        {
+            "name": "interval",
+            "label": "Interval (s)",
+            "type": "number",
+            "default": 0.1,
+            "min": 0.0,
+            "max": 3600.0,
+            "step": 0.1,
+            "decimals": 3,
+        },
+        {
+            "name": "count",
+            "label": "Count",
+            "type": "int",
+            "default": 1,
+            "min": 1,
+            "max": 1000000000,
+        },
+        {
+            "name": "loop",
+            "label": "Loop",
+            "type": "string",
+            "default": "false",
+            "options": [
+                "false",
+                "true",
+            ],
+        },
+        {
+            "name": "description",
+            "label": "Description",
+            "type": "string",
+            "default": "Scapy packet transmission",
+        },
+    ]
+}
+async def scapy_transmit(
+    component: SensorNode,
+    parameters: Dict[str, Any],
+    node_uid: str = "",
+) -> None:
+    """Transmit a serialized Scapy packet on the executing Sensor Node."""
+    op_params = dict(parameters or {})
+
+    op_params.setdefault(
+        "operation_id",
+        str(uuid.uuid4()),
+    )
+    op_params.setdefault(
+        "requester",
+        "plugin_action",
+    )
+
+    await component.run_plugin_operation(
+        component,
+        PLUGIN_NAME,
+        "scapy_transmit.py",
         op_params,
         node_uid,
     )

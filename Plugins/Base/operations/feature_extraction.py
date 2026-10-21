@@ -1043,199 +1043,12 @@ class OperationMain(Operation):
 
         return copied_records
 
-    async def _attach_artifacts_to_soi(
-        self,
-        *,
-        node_uid: str,
-        soi_id: str,
-        frequency_mhz: Any,
-        source_artifact_id: str,
-        analysis_artifact_id: str,
-        report_payload: Dict[str, Any],
-    ) -> None:
-        """
-        Publishes one SOI update containing both durable artifact relationships.
-        """
-        callback = getattr(self, "soi_callback", None)
-
-        if not callback:
-            raise RuntimeError(
-                "Attach to Existing SOI requires soi_callback."
-            )
-
-        try:
-            frequency_value = (
-                float(frequency_mhz)
-                if frequency_mhz not in [None, "", "None"]
-                else 0.0
-            )
-        except Exception:
-            frequency_value = 0.0
-
-        artifact_links = [
-            {
-                "artifact_id": source_artifact_id,
-                "role": "source_iq",
-                "operation_id": self.source_operation_id,
-            },
-            {
-                "artifact_id": analysis_artifact_id,
-                "role": "feature_analysis",
-                "operation_id": self.opid,
-                "source_artifact_id": source_artifact_id,
-            },
-        ]
-
-        result = callback(
-            node_uid=node_uid,
-            soi_id=soi_id,
-            frequency_mhz=frequency_value,
-            status="ANALYSIS_ATTACHED",
-            operation_id=self.opid,
-            artifact_id=analysis_artifact_id,
-            summary={
-                "stage": "feature_analysis_attached",
-                "stage_order": 60,
-                "artifact_links": artifact_links,
-                "source_artifact_id": source_artifact_id,
-                "analysis_artifact_id": analysis_artifact_id,
-                "feature_profile": report_payload.get("profile", ""),
-                "feature_preset": report_payload.get("preset", ""),
-                "feature_count": report_payload.get("feature_count", 0),
-                "result_count": report_payload.get("result_count", 0),
-                "description": report_payload.get("description", ""),
-            },
-            lat=True,
-            lon=True,
-            alt=True,
-            observation_time=True,
-        )
-
-        if inspect.isawaitable(result):
-            await asyncio.wait_for(result, timeout=2.0)
-
-    async def _create_soi_with_artifacts(
-        self,
-        *,
-        node_uid: str,
-        frequency_mhz: Any,
-        source_artifact_id: str,
-        analysis_artifact_id: str,
-        report_payload: Dict[str, Any],
-    ) -> str:
-        """
-        Creates a new SOI after both managed artifacts have been registered.
-
-        Returns:
-            The generated SOI ID.
-        """
-        callback = getattr(
-            self,
-            "soi_callback",
-            None,
-        )
-
-        if not callback:
-            raise RuntimeError(
-                "Create New SOI from Input requires soi_callback."
-            )
-
-        try:
-            frequency_value = float(frequency_mhz)
-        except Exception as error:
-            raise ValueError(
-                "Create New SOI from Input requires a valid frequency."
-            ) from error
-
-        if frequency_value <= 0:
-            raise ValueError(
-                "Create New SOI from Input requires a frequency "
-                "greater than 0 MHz."
-            )
-
-        new_soi_id = str(uuid.uuid4())
-
-        artifact_links = [
-            {
-                "artifact_id": source_artifact_id,
-                "role": "source_iq",
-                "operation_id": self.source_operation_id,
-            },
-            {
-                "artifact_id": analysis_artifact_id,
-                "role": "feature_analysis",
-                "operation_id": self.opid,
-                "source_artifact_id": source_artifact_id,
-            },
-        ]
-
-        result = callback(
-            node_uid=node_uid,
-            soi_id=new_soi_id,
-            frequency_mhz=frequency_value,
-            status="ANALYSIS_ATTACHED",
-            operation_id=self.opid,
-            artifact_id=analysis_artifact_id,
-            summary={
-                "stage": "feature_analysis_attached",
-                "stage_order": 60,
-                "created_by": "feature_extractor",
-                "artifact_links": artifact_links,
-                "source_artifact_id": source_artifact_id,
-                "analysis_artifact_id": analysis_artifact_id,
-                "feature_profile": report_payload.get(
-                    "profile",
-                    "",
-                ),
-                "feature_preset": report_payload.get(
-                    "preset",
-                    "",
-                ),
-                "feature_count": report_payload.get(
-                    "feature_count",
-                    0,
-                ),
-                "result_count": report_payload.get(
-                    "result_count",
-                    0,
-                ),
-                "description": report_payload.get(
-                    "description",
-                    "",
-                ),
-            },
-            lat=True,
-            lon=True,
-            alt=True,
-            observation_time=True,
-        )
-
-        if inspect.isawaitable(result):
-            await asyncio.wait_for(
-                result,
-                timeout=2.0,
-            )
-
-        return new_soi_id
-
     async def run(self) -> None:
         status_callback = getattr(self, "status_callback", None)
         params: Dict[str, Any] = getattr(self, "parameters", {}) or {}
         started_at = time.time()
-
-        node_uid = str(
-            params.get("node_uid", self.node_uid)
-            or self.node_uid
-            or ""
-        )
-
-        source_id = str(
-            params.get("source_id", self.source_id)
-            or node_uid
-            or "sensor_node"
-        )
-
-
+        node_uid = str(params.get("node_uid", self.node_uid) or self.node_uid or "")
+        source_id = str(params.get("source_id", self.source_id) or node_uid or "sensor_node")
         input_folder = params.get("folder", self.folder)
         files = params.get("files", self.files)
         data_type = params.get("data_type", self.data_type)
@@ -1244,505 +1057,190 @@ class OperationMain(Operation):
         checkboxes = params.get("checkboxes", self.checkboxes)
         features = params.get("features", self.features)
         extensions = params.get("extensions", self.extensions)
-        sidecar_name = params.get(
-            "selection_sidecar",
-            self.selection_sidecar,
-        )
-
-        destination = str(
-            params.get("destination", self.destination)
-            or "Local Results"
-        ).strip()
-
-        description = str(
-            params.get("description", self.description)
-            or ""
-        ).strip()
-
-        soi_id = str(
-            params.get("soi_id", self.soi_id)
-            or ""
-        ).strip()
-
-        soi_key = str(
-            params.get("soi_key", self.soi_key)
-            or ""
-        ).strip()
-
-        frequency_mhz = params.get(
-            "frequency_mhz",
-            self.frequency_mhz,
-        )
-
-        managed_input = params.get(
-            "managed_input",
-            self.managed_input,
-        )
-
-        if not isinstance(managed_input, dict):
-            managed_input = {}
-        
-        requested_operation_id = str(
-            params.get("operation_id", "")
-            or ""
-        ).strip()
-
+        sidecar_name = params.get("selection_sidecar", self.selection_sidecar)
+        destination = str(params.get("destination", self.destination) or "Local Results").strip()
+        description = str(params.get("description", self.description) or "").strip()
+        managed_input = params.get("managed_input", self.managed_input)
+        managed_input = dict(managed_input) if isinstance(managed_input, dict) else {}
+        input_soi_id = str(params.get("input_soi_id") or managed_input.get("input_soi_id") or "").strip()
+        input_soi_key = str(params.get("input_soi_key") or managed_input.get("input_soi_key") or "").strip()
+        input_soi_frequency_mhz = params.get("input_soi_frequency_mhz")
+        requested_operation_id = str(params.get("operation_id", "") or "").strip()
         if requested_operation_id:
             self.opid = requested_operation_id
-
-        source_operation_id = str(
-            params.get(
-                "source_operation_id",
-                self.source_operation_id,
-            )
-            or ""
-        ).strip()
-
+        source_operation_id = str(params.get("source_operation_id", self.source_operation_id) or "").strip()
         if source_operation_id:
             self.source_operation_id = source_operation_id
 
-        artifact_id = str(
-            params.get("artifact_id", self.artifact_id)
-            or ""
-        ).strip()
-
-        checkboxes = resolve_feature_selection(
-            profile=profile,
-            preset=preset,
-            checkboxes=checkboxes,
-            features=features,
-        )
-
-        if extensions is None:
-            extensions = list(DEFAULTS["extensions"])
-
-        input_folder = (
-            os.path.abspath(input_folder)
-            if isinstance(input_folder, str) and input_folder
-            else None
-        )
-
+        checkboxes = resolve_feature_selection(profile=profile, preset=preset, checkboxes=checkboxes, features=features)
+        extensions = list(DEFAULTS["extensions"]) if extensions is None else extensions
+        input_folder = os.path.abspath(input_folder) if isinstance(input_folder, str) and input_folder else None
         resolved_files: List[str] = []
         wrote_features = False
 
         try:
-            await _set_status(
-                status_callback,
-                "Running: Feature Extraction",
-                self.logger,
-            )
+            await _set_status(status_callback, "Running: Feature Extraction", self.logger)
 
             if managed_input:
-                (
-                    resolved_files,
-                    managed_parent,
-                ) = self._resolve_node_local_managed_input(
-                    managed_input
-                )
-
+                resolved_files, managed_parent = self._resolve_node_local_managed_input(managed_input)
                 if managed_parent:
                     input_folder = managed_parent
-
                 self.logger.info(
-                    "Resolved managed %s input on Sensor Node: "
-                    "artifacts=%r files=%d",
-                    managed_input.get("source", "Artifact"),
-                    managed_input.get("artifact_ids", []),
-                    len(resolved_files),
+                    "Resolved managed Artifact input on Sensor Node: artifacts=%r files=%d",
+                    managed_input.get("artifact_ids", []), len(resolved_files),
                 )
-
             elif files and isinstance(files, list):
                 for filepath in files:
-                    if not isinstance(filepath, str):
-                        continue
-
-                    path = os.path.abspath(filepath)
-
-                    if os.path.isfile(path):
-                        resolved_files.append(path)
-
+                    if isinstance(filepath, str):
+                        path = os.path.abspath(filepath)
+                        if os.path.isfile(path):
+                            resolved_files.append(path)
                 if not input_folder and resolved_files:
-                    input_folder = os.path.dirname(
-                        resolved_files[0]
-                    )
-
+                    input_folder = os.path.dirname(resolved_files[0])
             elif input_folder and isinstance(input_folder, str):
-                sidecar_path = os.path.join(
-                    input_folder,
-                    sidecar_name,
-                )
-
+                sidecar_path = os.path.join(input_folder, sidecar_name)
                 if os.path.isfile(sidecar_path):
                     try:
-                        resolved_files = _resolve_sidecar_files(
-                            sidecar_path
-                        )
-                    except Exception as e:
-                        self.logger.warning(
-                            "Failed reading sidecar %s: %r",
-                            sidecar_path,
-                            e,
-                        )
-
+                        resolved_files = _resolve_sidecar_files(sidecar_path)
+                    except Exception as error:
+                        self.logger.warning("Failed reading sidecar %s: %r", sidecar_path, error)
                 if not resolved_files:
-                    resolved_files = resolve_files_from_folder(
-                        input_folder,
-                        extensions,
-                    )
-
-            else:
-                if self.artifact_manager is None:
-                    raise RuntimeError(
-                        "Managed Feature Extractor input requires artifact_manager."
-                    )
-
-                _, input_folder = self.artifact_manager.create_operation_dir(
-                    self.opid
-                )
-
-                resolved_files = resolve_files_from_folder(
-                    input_folder,
-                    extensions,
-                )
+                    resolved_files = resolve_files_from_folder(input_folder, extensions)
 
             if not resolved_files:
-                self.logger.warning(
-                    "No input files resolved "
-                    "(input_folder=%r).",
-                    input_folder,
-                )
+                self.logger.warning("No input files resolved (input_folder=%r).", input_folder)
                 return
-            
-            input_source = str(
-                params.get("input_source")
-                or managed_input.get("source")
-                or (
-                    "Folder"
-                    if len(resolved_files) > 1
-                    else "File"
-                )
-            ).strip()
 
-            source_artifact_ids = (
-                params.get("source_artifact_ids")
-                or managed_input.get("artifact_ids")
-                or []
-            )
-
+            input_source = str(params.get("input_source") or managed_input.get("source") or ("Folder" if len(resolved_files) > 1 else "Files")).strip()
+            source_artifact_ids = params.get("source_artifact_ids") or managed_input.get("artifact_ids") or []
             if not isinstance(source_artifact_ids, list):
-                source_artifact_ids = [
-                    source_artifact_ids
-                ]
+                source_artifact_ids = [source_artifact_ids]
+            source_artifact_ids = [str(value or "").strip() for value in source_artifact_ids if str(value or "").strip()]
 
-            source_artifact_ids = [
-                str(artifact_id or "").strip()
-                for artifact_id in source_artifact_ids
-                if str(artifact_id or "").strip()
-            ]
+            if destination not in {"Local Results", "Artifact"}:
+                raise ValueError(f"Unsupported Feature Extractor destination: {destination}")
 
-            source_artifact_id = str(
-                params.get("source_artifact_id")
-                or (
-                    source_artifact_ids[0]
-                    if len(source_artifact_ids) == 1
-                    else ""
-                )
-                or ""
-            ).strip()
-
-            input_soi_id = str(
-                params.get("input_soi_id")
-                or managed_input.get("input_soi_id")
-                or ""
-            ).strip()
-
-            input_soi_key = str(
-                params.get("input_soi_key")
-                or managed_input.get("input_soi_key")
-                or ""
-            ).strip()
-
-            managed_analysis_destinations = {
-                "New Analysis Artifact",
-                "Attach to Existing SOI",
-                "Create New SOI from Input",
-            }
-
-            if destination in managed_analysis_destinations:
-                if not getattr(self, "artifact_manager", None):
-                    raise RuntimeError(
-                        f"{destination} requires artifact_manager."
-                    )
-
-                _, output_folder = self.artifact_manager.create_operation_dir(
-                    self.opid
-                )
-
-                artifact_id = ""
+            if destination == "Artifact":
+                if self.artifact_manager is None:
+                    raise RuntimeError("Artifact output requires artifact_manager.")
+                if not self.opid:
+                    self.opid = str(uuid.uuid4())
+                _, output_folder = self.artifact_manager.create_operation_dir(self.opid)
+            elif managed_input:
+                if self.artifact_manager is None:
+                    raise RuntimeError("Managed Artifact input requires artifact_manager.")
+                if not self.opid:
+                    self.opid = str(uuid.uuid4())
+                _, output_folder = self.artifact_manager.create_operation_dir(self.opid)
             else:
                 output_folder = input_folder
 
-                if not artifact_id:
-                    artifact_id = _infer_artifact_id(
-                        input_folder
+            source_file_records: List[Dict[str, Any]] = []
+            if destination == "Artifact" and not source_artifact_ids:
+                if not self.source_operation_id:
+                    self.source_operation_id = str(uuid.uuid4())
+                _, source_folder = self.artifact_manager.create_operation_dir(self.source_operation_id)
+                source_file_records = self._copy_source_iq_files(resolved_files, source_folder)
+                source_paths = [record["path"] for record in source_file_records if record.get("path")]
+                if source_paths:
+                    source_metadata = {
+                        "workflow": "feature_extractor",
+                        "role": "feature_source_iq",
+                        "node_uid": node_uid,
+                        "source_id": source_id,
+                        "operation_id": self.source_operation_id,
+                        "description": description or "Feature Extractor source IQ",
+                        "input_soi_id": input_soi_id,
+                        "input_soi_key": input_soi_key,
+                        "data_type": data_type,
+                        "file_count": len(source_paths),
+                    }
+                    file_metadata = {
+                        record["path"]: {
+                            "role": record.get("role", "source_iq"),
+                            "content_type": "application/json" if record.get("role") == "sigmf_metadata" else "application/octet-stream",
+                        }
+                        for record in source_file_records if record.get("path")
+                    }
+                    source_artifact_id = self.artifact_manager.create_artifact(
+                        source_id=source_id,
+                        operation_id=self.source_operation_id,
+                        files=source_paths,
+                        name=(description or "Feature Extractor") + " Source IQ",
+                        artifact_type="feature_source_iq",
+                        metadata=_json_safe(source_metadata),
+                        file_metadata=file_metadata,
                     )
-
-            self.artifact_id = artifact_id
-
-            source_artifact_id = ""
-            analysis_artifact_id = ""
+                    source_artifact_ids = [str(source_artifact_id)]
 
             self.logger.info(
-                "TSI FE: destination=%r, profile=%r, preset=%r, "
-                "data_type=%r, features=%d, files=%d, "
-                "input_folder=%r, output_folder=%r, operation_id=%r",
-                destination,
-                profile,
-                preset,
-                data_type,
-                len(checkboxes),
-                len(resolved_files),
-                input_folder,
-                output_folder,
-                self.opid,
+                "TSI FE: destination=%r profile=%r preset=%r data_type=%r features=%d files=%d input=%r output=%r operation_id=%r source_artifacts=%r",
+                destination, profile, preset, data_type, len(checkboxes), len(resolved_files), input_folder, output_folder, self.opid, source_artifact_ids,
             )
-
-            await _set_status(
-                status_callback,
-                f"Running: Feature Extraction ({len(resolved_files)} files)",
-                self.logger,
-            )
+            await _set_status(status_callback, f"Running: Feature Extraction ({len(resolved_files)} files)", self.logger)
 
             results: List[Dict[str, Any]] = []
-
-            for index, path in enumerate(
-                resolved_files,
-                start=1,
-            ):
+            for index, path in enumerate(resolved_files, start=1):
                 if self._stop:
-                    self.logger.info(
-                        "Stop requested; terminating feature extraction early."
-                    )
+                    self.logger.info("Stop requested; terminating feature extraction early.")
                     return
-
                 try:
-                    st = os.stat(path)
-                    iq_data = read_iq_file(
-                        path,
-                        data_type=data_type,
-                    )
-                    extracted_features = compute_features(
-                        iq_data,
-                        data_type=data_type,
-                        checkboxes=checkboxes,
-                    )
-
-                    results.append(
-                        {
-                            "file": os.path.basename(path),
-                            "path": path,
-                            "data_type": data_type,
-                            "size_bytes": int(st.st_size),
-                            "mtime": float(st.st_mtime),
-                            "sha256": _sha256_file(path),
-                            "features": _json_safe(
-                                extracted_features
-                            ),
-                        }
-                    )
-
-                except Exception as e:
-                    self.logger.error(
-                        "Feature extraction failed for %s: %r",
-                        path,
-                        e,
-                    )
-
-                    results.append(
-                        {
-                            "file": os.path.basename(path),
-                            "path": path,
-                            "data_type": data_type,
-                            "error": repr(e),
-                        }
-                    )
-
+                    stat = os.stat(path)
+                    iq_data = read_iq_file(path, data_type=data_type)
+                    extracted = compute_features(iq_data, data_type=data_type, checkboxes=checkboxes)
+                    results.append({
+                        "file": os.path.basename(path),
+                        "path": path,
+                        "data_type": data_type,
+                        "size_bytes": int(stat.st_size),
+                        "mtime": float(stat.st_mtime),
+                        "sha256": _sha256_file(path),
+                        "features": _json_safe(extracted),
+                    })
+                except Exception as error:
+                    self.logger.error("Feature extraction failed for %s: %r", path, error)
+                    results.append({"file": os.path.basename(path), "path": path, "data_type": data_type, "error": repr(error)})
                 if index < len(resolved_files):
                     await asyncio.sleep(0)
 
             if self._stop:
-                self.logger.info(
-                    "Stop requested; skipping tsi_features.json write."
-                )
+                self.logger.info("Stop requested; skipping tsi_features.json write.")
                 return
-
             self.feature_results = results
-
             if not output_folder:
-                raise RuntimeError(
-                    "Feature Extractor output folder could not be resolved."
-                )
-
+                raise RuntimeError("Feature Extractor output folder could not be resolved.")
             os.makedirs(output_folder, exist_ok=True)
 
-            out_path = os.path.join(
-                output_folder,
-                "tsi_features.json",
-            )
-
-            with open(
-                out_path,
-                "w",
-                encoding="utf-8",
-            ) as feature_file:
-                json.dump(
-                    _json_safe(results),
-                    feature_file,
-                    indent=2,
-                    allow_nan=False,
-                )
-
+            out_path = os.path.join(output_folder, "tsi_features.json")
+            with open(out_path, "w", encoding="utf-8") as handle:
+                json.dump(_json_safe(results), handle, indent=2, allow_nan=False)
             self.output_path = out_path
             wrote_features = True
 
-            self.logger.info(
-                "Wrote feature output: %s",
-                out_path,
-            )
-
-            source_file_records: List[Dict[str, Any]] = []
-
-            if destination in {
-                "Attach to Existing SOI",
-                "Create New SOI from Input",
-            }:
-                if (
-                    destination == "Attach to Existing SOI"
-                    and not soi_id
-                ):
-                    raise ValueError(
-                        "Attach to Existing SOI requires soi_id."
-                    )
-
-                if not self.source_operation_id:
-                    self.source_operation_id = str(uuid.uuid4())
-
-                _, source_folder = self.artifact_manager.create_operation_dir(
-                    self.source_operation_id
-                )
-
-                source_file_records = self._copy_source_iq_files(
-                    resolved_files,
-                    source_folder,
-                )
-
-                if not source_file_records:
-                    raise RuntimeError(
-                        "No source IQ files were copied into "
-                        "managed artifact storage."
-                    )
-
-                source_metadata = {
-                    "kind": "artifact",
-                    "event_type": "artifact",
-                    "role": "source_iq_v1",
-                    "node_uid": node_uid,
-                    "source_id": source_id,
-                    "operation_id": self.source_operation_id,
-                    "target_soi_id": soi_id,
-                    "target_soi_key": soi_key,
-                    "creates_new_soi": (
-                        destination
-                        == "Create New SOI from Input"
-                    ),
-                    "frequency_mhz": frequency_mhz,
-                    "description": (
-                        description
-                        or "Feature Extractor source IQ"
-                    ),
-                    "data_type": data_type,
-                    "file_count": len(source_file_records),
-                    "files": source_file_records,
-                }
-
-                source_artifact = (
-                    self.artifact_manager
-                    .create_zip_artifact_from_folder(
-                        source_id=source_id,
-                        operation_id=self.source_operation_id,
-                        folder=source_folder,
-                        name=(
-                            "SOI Source IQ"
-                            + (
-                                f" - {description}"
-                                if description
-                                else ""
-                            )
-                        ),
-                        metadata=_json_safe(source_metadata),
-                        relations=(
-                            [
-                                (
-                                    "soi",
-                                    soi_id,
-                                    "source_iq",
-                                )
-                            ]
-                            if soi_id
-                            else []
-                        ),
-                        arc_prefix=(
-                            "source_iq_"
-                            f"{self.source_operation_id}"
-                        ),
-                    )
-                )
-
-                source_artifact_id = self._artifact_id_value(
-                    source_artifact
-                )
-
-                if not source_artifact_id:
-                    raise RuntimeError(
-                        "Source IQ artifact registration did not "
-                        "return an artifact ID."
-                    )
-
+            completed_at = time.time()
+            analysis_artifact_id = str(uuid.uuid4()) if destination == "Artifact" else ""
             report_payload = {
                 "kind": "feature_analysis",
                 "event_type": "feature_extraction",
-                "role": "feature_analysis_v1",
+                "role": "feature_analysis_v2",
+                "workflow": "feature_extractor",
+                "status": "completed",
                 "node_uid": node_uid,
                 "source_id": source_id,
                 "operation_id": self.opid,
-                "artifact_id": artifact_id,
+                "artifact_id": analysis_artifact_id,
                 "destination": destination,
                 "description": description,
+                "input_source": input_source,
                 "input_folder": input_folder,
-                "managed_input_source": str(
-                    managed_input.get("source", "")
-                    or ""
-                ).strip(),
-                "source_artifact_ids": list(
-                    managed_input.get("artifact_ids", [])
-                    if isinstance(
-                        managed_input.get("artifact_ids", []),
-                        list,
-                    )
-                    else []
-                ),
-                "input_soi_id": str(
-                    managed_input.get("input_soi_id", "")
-                    or params.get("input_soi_id", "")
-                    or ""
-                ).strip(),
-                "input_soi_key": str(
-                    managed_input.get("input_soi_key", "")
-                    or params.get("input_soi_key", "")
-                    or ""
-                ).strip(),
+                "source_artifact_id": source_artifact_ids[0] if len(source_artifact_ids) == 1 else "",
+                "source_artifact_ids": source_artifact_ids,
+                "input_soi_id": input_soi_id,
+                "input_soi_key": input_soi_key,
+                "input_soi_frequency_mhz": input_soi_frequency_mhz,
                 "folder": output_folder,
-                "feature_file": out_path,
+                "feature_file": "tsi_features.json",
+                "report_file": "feature_extraction_report.json",
                 "data_type": data_type,
                 "profile": _normalize_profile_name(profile),
                 "preset": _normalize_preset_name(preset),
@@ -1750,248 +1248,49 @@ class OperationMain(Operation):
                 "feature_count": len(checkboxes),
                 "input_count": len(resolved_files),
                 "result_count": len(results),
-                "error_count": len(
-                    [
-                        result
-                        for result in results
-                        if "error" in result
-                    ]
-                ),
-                "errors": [
-                    result
-                    for result in results
-                    if "error" in result
-                ],
-                "target_soi_id": soi_id,
-                "target_soi_key": soi_key,
+                "error_count": len([result for result in results if "error" in result]),
+                "errors": [result for result in results if "error" in result],
                 "source_operation_id": self.source_operation_id,
-                "source_artifact_id": source_artifact_id,
                 "source_files": source_file_records,
-                "artifact_links": (
-                    [
-                        {
-                            "artifact_id": source_artifact_id,
-                            "role": "source_iq",
-                            "operation_id": self.source_operation_id,
-                        }
-                    ]
-                    if source_artifact_id
-                    else []
-                ),
-                "creates_new_soi": (
-                    destination
-                    == "Create New SOI from Input"
-                ),
                 "started_at": started_at,
-                "completed_at": None,
-                "duration_s": None,
+                "completed_at": completed_at,
+                "duration_s": max(0.0, completed_at - started_at),
             }
-
-            report_path = os.path.join(
-                output_folder,
-                "feature_extraction_report.json",
-            )
-
-            with open(
-                report_path,
-                "w",
-                encoding="utf-8",
-            ) as report_file:
-                json.dump(
-                    _json_safe(report_payload),
-                    report_file,
-                    indent=2,
-                    allow_nan=False,
-                )
-
+            report_path = os.path.join(output_folder, "feature_extraction_report.json")
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump(_json_safe(report_payload), handle, indent=2, allow_nan=False)
             self.report_path = report_path
 
-            if destination in managed_analysis_destinations:
-                artifact_name = (
-                    description
-                    or "Feature Extraction Analysis"
+            if destination == "Artifact":
+                file_metadata = {
+                    out_path: {"role": "feature_results", "content_type": "application/json"},
+                    report_path: {"role": "operation_metadata", "content_type": "application/json"},
+                }
+                relations = [("artifact", artifact_id, "derived_from") for artifact_id in source_artifact_ids]
+                registered_id = self.artifact_manager.create_artifact(
+                    source_id=source_id,
+                    operation_id=self.opid,
+                    files=[out_path, report_path],
+                    name=description or "Feature Extraction Analysis",
+                    artifact_type="feature_analysis",
+                    metadata=_json_safe(report_payload),
+                    relations=relations,
+                    file_metadata=file_metadata,
+                    artifact_id=analysis_artifact_id,
                 )
-
-                analysis_artifact = (
-                    self.artifact_manager
-                    .create_zip_artifact_from_folder(
-                        source_id=source_id,
-                        operation_id=self.opid,
-                        folder=output_folder,
-                        name=artifact_name,
-                        metadata=_json_safe({
-                            "workflow": "feature_extractor",
-                            "status": "completed",
-                            "operation_id": self.opid,
-                            "destination": destination,
-                            "profile": _normalize_profile_name(profile),
-                            "preset": _normalize_preset_name(preset),
-                            "input_source": input_source,
-                            "source_artifact_id": source_artifact_id,
-                            "source_artifact_ids": source_artifact_ids,
-                            "input_soi_id": input_soi_id,
-                            "input_soi_key": input_soi_key,
-                            "target_soi_id": soi_id,
-                            "result_count": len(results),
-                            "error_count": len([
-                                result
-                                for result in results
-                                if "error" in result
-                            ]),
-                            "feature_count": len(checkboxes),
-                            "feature_file": "tsi_features.json",
-                            "report_file": "feature_extraction_report.json",
-                            "started_at": started_at,
-                            "completed_at": time.time(),
-                        }),
-                        arc_prefix=(
-                            "feature_analysis_"
-                            f"{self.opid}"
-                        ),
-                    )
-                )
-
-                analysis_artifact_id = self._artifact_id_value(
-                    analysis_artifact
-                )
-
-                if not analysis_artifact_id:
-                    analysis_artifact_id = self.opid
-
-                self.artifact_id = analysis_artifact_id
-                report_payload["artifact_id"] = analysis_artifact_id
-
-                if destination in {
-                    "Attach to Existing SOI",
-                    "Create New SOI from Input",
-                }:
-                    report_payload[
-                        "analysis_artifact_id"
-                    ] = analysis_artifact_id
-
-                    report_payload[
-                        "artifact_links"
-                    ].append(
-                        {
-                            "artifact_id":
-                                analysis_artifact_id,
-                            "role":
-                                "feature_analysis",
-                            "operation_id":
-                                self.opid,
-                            "source_artifact_id":
-                                source_artifact_id,
-                        }
-                    )
-
-                with open(
-                    report_path,
-                    "w",
-                    encoding="utf-8",
-                ) as report_file:
-                    json.dump(
-                        _json_safe(report_payload),
-                        report_file,
-                        indent=2,
-                        allow_nan=False,
-                    )
-
-                self.logger.info(
-                    "Registered Feature Analysis artifact: "
-                    "artifact_id=%r, operation_id=%r, folder=%r",
-                    analysis_artifact_id,
-                    self.opid,
-                    output_folder,
-                )
-
-                if destination == "Attach to Existing SOI":
-                    await self._attach_artifacts_to_soi(
-                        node_uid=node_uid,
-                        soi_id=soi_id,
-                        frequency_mhz=frequency_mhz,
-                        source_artifact_id=source_artifact_id,
-                        analysis_artifact_id=analysis_artifact_id,
-                        report_payload=report_payload,
-                    )
-
-                elif destination == "Create New SOI from Input":
-                    soi_id = await self._create_soi_with_artifacts(
-                        node_uid=node_uid,
-                        frequency_mhz=frequency_mhz,
-                        source_artifact_id=source_artifact_id,
-                        analysis_artifact_id=analysis_artifact_id,
-                        report_payload=report_payload,
-                    )
-
-                    report_payload["target_soi_id"] = soi_id
-                    report_payload["created_soi_id"] = soi_id
-
-                    with open(
-                        report_path,
-                        "w",
-                        encoding="utf-8",
-                    ) as report_file:
-                        json.dump(
-                            _json_safe(report_payload),
-                            report_file,
-                            indent=2,
-                            allow_nan=False,
-                        )
-
-                    self.logger.info(
-                        "Created SOI from Feature Extractor input: "
-                        "soi_id=%r, frequency_mhz=%r, "
-                        "source_artifact_id=%r, "
-                        "analysis_artifact_id=%r",
-                        soi_id,
-                        frequency_mhz,
-                        source_artifact_id,
-                        analysis_artifact_id,
-                    )
-
-            completed_at = time.time()
-            report_payload["completed_at"] = completed_at
-            report_payload["duration_s"] = max(
-                0.0,
-                completed_at - started_at,
-            )
-            report_payload["target_soi_id"] = soi_id
-
-            with open(
-                report_path,
-                "w",
-                encoding="utf-8",
-            ) as report_file:
-                json.dump(
-                    _json_safe(report_payload),
-                    report_file,
-                    indent=2,
-                    allow_nan=False,
-                )
+                self.artifact_id = str(registered_id or analysis_artifact_id)
+                report_payload["artifact_id"] = self.artifact_id
+                self.logger.info("Registered Feature Analysis artifact: artifact_id=%r operation_id=%r files=2", self.artifact_id, self.opid)
+            else:
+                self.artifact_id = ""
 
             self.report_payload = report_payload
-
-            self.logger.info(
-                "Wrote feature extraction report: %s",
-                report_path,
-            )
-
-
-            return
+            self.logger.info("Wrote feature extraction report: %s", report_path)
 
         finally:
             if self._stop and not wrote_features:
-                self.logger.info(
-                    "Feature extraction stopped before output was written."
-                )
-
-            await _set_status(
-                status_callback,
-                "Idle",
-                self.logger,
-            )
-
-
+                self.logger.info("Feature extraction stopped before output was written.")
+            await _set_status(status_callback, "Idle", self.logger)
 
 
 if __name__ == "__main__":

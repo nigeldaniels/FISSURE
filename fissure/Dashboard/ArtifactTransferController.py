@@ -313,10 +313,15 @@ class ArtifactTransferController:
             transfer_id,
             None,
         )
-        self.pending_requests.pop(
+        pending_request = self.pending_requests.pop(
             transfer_id,
             None,
         )
+        failed_artifact_id = str(
+            (transfer.artifact_id if transfer is not None else "")
+            or ((pending_request or {}).get("artifact_id", ""))
+            or ""
+        ).strip()
 
         self.frontend.iq_record_select_after_download_id = ""
 
@@ -348,6 +353,41 @@ class ArtifactTransferController:
             False,
             "Download",
         )
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_sa_inspection_artifact_download_complete(
+                self.frontend,
+                failed_artifact_id,
+            )
+        except Exception:
+            pass
+
+        try:
+            from fissure.Dashboard.Slots.TSITabSlots import pd_demodulation
+            pd_demodulation.handle_sa_pd_demodulation_artifact_download_complete(
+                self.frontend, failed_artifact_id
+            )
+        except Exception:
+            pass
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_tsi_fe_artifact_download_complete(
+                self.frontend,
+                failed_artifact_id,
+            )
+        except Exception:
+            pass
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_sa_classifier_artifact_download_complete(
+                self.frontend,
+                failed_artifact_id,
+            )
+        except Exception:
+            pass
 
     def _handle_start(
         self,
@@ -757,7 +797,6 @@ class ArtifactTransferController:
             current.final_path,
         )
 
-
     def _handle_complete(
         self,
         frame: ArtifactTransferFrame,
@@ -1014,6 +1053,54 @@ class ArtifactTransferController:
                 )
             except Exception:
                 pass
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_sa_inspection_artifact_download_complete(
+                self.frontend,
+                transfer.artifact_id,
+            )
+        except Exception as error:
+            self.logger.debug(
+                "Could not refresh Signal Analysis Inspection "
+                "after Artifact download: %s",
+                error,
+            )
+
+        try:
+            from fissure.Dashboard.Slots.TSITabSlots import pd_demodulation
+            pd_demodulation.handle_sa_pd_demodulation_artifact_download_complete(
+                self.frontend, transfer.artifact_id
+            )
+        except Exception as error:
+            self.logger.debug(
+                "Could not refresh Protocol Discovery Demodulation after "
+                "Artifact download: %s", error
+            )
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_tsi_fe_artifact_download_complete(
+                self.frontend,
+                transfer.artifact_id,
+            )
+        except Exception as error:
+            self.logger.debug(
+                "Could not refresh Feature Extractor after Artifact download: %s",
+                error,
+            ) 
+
+        try:
+            from fissure.Dashboard.Slots import TSITabSlots
+            TSITabSlots.handle_sa_classifier_artifact_download_complete(
+                self.frontend,
+                transfer.artifact_id,
+            )
+        except Exception as error:
+            self.logger.debug(
+                "Could not refresh Classifier after Artifact download: %s",
+                error,
+            )
 
         if transfer.open_when_complete:
             subprocess.Popen(
@@ -1355,6 +1442,69 @@ class ArtifactTransferController:
                             "destination first."
                         )
                     )
+                )
+
+        except Exception:
+            pass
+
+        # Signal Analysis Capture Artifact buttons.
+        try:
+            selected_artifact_id = str(
+                getattr(
+                    self.frontend,
+                    "sa_capture_artifact_id",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            download_button = (
+                self.frontend.ui
+                .pushButton_sa_capture_last_capture_download
+            )
+            open_button = (
+                self.frontend.ui
+                .pushButton_sa_capture_last_capture_open_folder
+            )
+
+            matching_transfer = bool(
+                active
+                and selected_artifact_id
+                and selected_artifact_id == transfer_artifact_id
+            )
+
+            if matching_transfer:
+                download_button.setText(text)
+                download_button.setEnabled(False)
+                open_button.setEnabled(False)
+
+            elif not active:
+                local_path = self.get_local_path(
+                    selected_artifact_id
+                )
+                download_button.setText(
+                    "Downloaded"
+                    if local_path
+                    else "Download"
+                )
+                download_button.setEnabled(
+                    bool(selected_artifact_id)
+                    and not bool(local_path)
+                )
+                download_button.setToolTip(
+                    str(local_path)
+                    if local_path
+                    else (
+                        f"Download Capture Artifact {selected_artifact_id}"
+                        if selected_artifact_id
+                        else "No Capture Artifact is available."
+                    )
+                )
+                open_button.setEnabled(
+                    bool(local_path)
+                )
+                open_button.setToolTip(
+                    str(local_path or "")
                 )
 
         except Exception:

@@ -76,216 +76,89 @@ def update_tsi_fe_selected_node_gate(dashboard: QtCore.QObject):
     )
 
 
-def initialize_tsi_feature_extractor_controls(
-    dashboard: QtCore.QObject,
-):
-    """
-    Initializes the TSI Feature Extractor controls.
-
-    Safe to call more than once. This initializes:
-        - selected-node illustration
-        - workflow ribbon icons
-        - Files / Folder / Artifact / SOI input state
-        - Profile choices
-        - browse and refresh button icons
-        - selected-node gate
-        - Run controls
-        - Results controls
-    """
-    select_node_icon_path = os.path.join(
-        fissure.utils.UI_DIR,
-        "Icons",
-        "select_node.png",
-    )
-
-    select_node_label = getattr(
-        dashboard.ui,
-        "label_tsi_fe_select_sensor_node_image",
-        None,
-    )
-
-    if (
-        select_node_label is not None
-        and os.path.isfile(select_node_icon_path)
-    ):
-        select_node_label.setPixmap(
-            QtGui.QPixmap(select_node_icon_path)
-        )
+def initialize_tsi_feature_extractor_controls(dashboard: QtCore.QObject):
+    """Initialize the Feature Extractor around Artifact-first SOI context."""
+    select_node_icon_path = os.path.join(fissure.utils.UI_DIR, "Icons", "select_node.png")
+    select_node_label = getattr(dashboard.ui, "label_tsi_fe_select_sensor_node_image", None)
+    if select_node_label is not None and os.path.isfile(select_node_icon_path):
+        select_node_label.setPixmap(QtGui.QPixmap(select_node_icon_path))
 
     workflow_icons = {
-        "label_tsi_fe_workflow_source_icon":
-            "conditioner_source.svg",
-        "label_tsi_fe_workflow_node_icon":
-            "conditioner_node.svg",
-        "label_tsi_fe_workflow_action_icon":
-            "conditioner_action.svg",
-        "label_tsi_fe_workflow_inputs_icon":
-            "conditioner_count.svg",
-        "label_tsi_fe_workflow_profile_icon":
-            "conditioner_method.svg",
-        "label_tsi_fe_workflow_output_type_icon":
-            "conditioner_artifact.svg",
+        "label_tsi_fe_workflow_source_icon": "conditioner_source.svg",
+        "label_tsi_fe_workflow_node_icon": "conditioner_node.svg",
+        "label_tsi_fe_workflow_action_icon": "conditioner_action.svg",
+        "label_tsi_fe_workflow_inputs_icon": "conditioner_count.svg",
+        "label_tsi_fe_workflow_profile_icon": "conditioner_method.svg",
+        "label_tsi_fe_workflow_output_type_icon": "conditioner_artifact.svg",
     }
-
     for label_name, icon_name in workflow_icons.items():
-        label = getattr(
-            dashboard.ui,
-            label_name,
-            None,
-        )
+        label = getattr(dashboard.ui, label_name, None)
+        icon_path = os.path.join(fissure.utils.UI_DIR, "Icons", icon_name)
+        if label is not None and os.path.isfile(icon_path):
+            label.setPixmap(QtGui.QPixmap(icon_path))
 
-        icon_path = os.path.join(
-            fissure.utils.UI_DIR,
-            "Icons",
-            icon_name,
-        )
-
-        if (
-            label is not None
-            and os.path.isfile(icon_path)
-        ):
-            label.setPixmap(
-                QtGui.QPixmap(icon_path)
-            )
-
-    browse_icon_path = os.path.join(
-        fissure.utils.UI_DIR,
-        "Icons",
-        "folder_black.svg",
-    )
-
+    browse_icon_path = os.path.join(fissure.utils.UI_DIR, "Icons", "folder_black.svg")
     if os.path.isfile(browse_icon_path):
-        browse_button = (
-            dashboard.ui.pushButton_tsi_fe_input_folder
-        )
+        button = dashboard.ui.pushButton_tsi_fe_input_folder
+        button.setIcon(QtGui.QIcon(browse_icon_path))
+        button.setText("")
+        button.setToolTip("Select input folder")
+        button.setIconSize(QtCore.QSize(18, 18))
 
-        browse_button.setIcon(
-            QtGui.QIcon(browse_icon_path)
-        )
-        browse_button.setText("")
-        browse_button.setToolTip(
-            "Select input folder"
-        )
-        browse_button.setIconSize(
-            QtCore.QSize(18, 18)
-        )
-
-    refresh_icon_path = os.path.join(
-        fissure.utils.UI_DIR,
-        "Icons",
-        "refresh.png",
-    )
-
+    refresh_icon_path = os.path.join(fissure.utils.UI_DIR, "Icons", "refresh.png")
     if os.path.isfile(refresh_icon_path):
-        refresh_buttons = (
-            (
-                "pushButton_tsi_fe_input_refresh",
-                "Refresh file list",
-            ),
-            (
-                "pushButton_tsi_fe_input_artifact_refresh",
-                "Refresh available artifacts",
-            ),
-            (
-                "pushButton_tsi_fe_input_soi_refresh",
-                "Refresh available SOIs",
-            ),
-        )
-
-        for button_name, tooltip in refresh_buttons:
-            button = getattr(
-                dashboard.ui,
-                button_name,
-                None,
-            )
-
+        for button_name, tooltip in (
+            ("pushButton_tsi_fe_input_refresh", "Refresh file list"),
+            ("pushButton_tsi_fe_input_artifact_refresh", "Refresh available artifacts"),
+        ):
+            button = getattr(dashboard.ui, button_name, None)
             if button is None:
                 continue
-
-            button.setIcon(
-                QtGui.QIcon(refresh_icon_path)
-            )
+            button.setIcon(QtGui.QIcon(refresh_icon_path))
             button.setText("")
             button.setToolTip(tooltip)
-            button.setIconSize(
-                QtCore.QSize(18, 18)
-            )
+            button.setIconSize(QtCore.QSize(18, 18))
 
-    dashboard.tsi_fe_input_folder = getattr(
-        dashboard,
-        "tsi_fe_input_folder",
-        "",
-    )
-
+    dashboard.tsi_fe_input_folder = getattr(dashboard, "tsi_fe_input_folder", "")
     dashboard.tsi_fe_input_artifacts = []
     dashboard.tsi_fe_input_sois = []
-
     dashboard.tsi_fe_selected_input_artifact = {}
+    dashboard.tsi_fe_selected_input_artifact_files = []
     dashboard.tsi_fe_selected_input_soi = {}
+    dashboard.tsi_fe_result_saved_to_soi = False
+    dashboard.tsi_fe_last_selected_node_uid = str(
+        getattr(dashboard, "selected_node_uid", "") or ""
+    ).strip()
 
-    source_combo = (
-        dashboard.ui.comboBox_tsi_fe_input_source
-    )
-
+    source_combo = dashboard.ui.comboBox_tsi_fe_input_source
     source_combo.blockSignals(True)
     source_combo.clear()
-    source_combo.addItems([
-        "Files",
-        "Folder",
-        "Artifact",
-        "SOI",
-    ])
+    source_combo.addItems(["Files", "Folder", "Artifact"])
     source_combo.setCurrentText("Files")
     source_combo.blockSignals(False)
 
-    artifact_combo = (
-        dashboard.ui.comboBox_tsi_fe_input_artifact
-    )
-
+    artifact_combo = dashboard.ui.comboBox_tsi_fe_input_artifact
     artifact_combo.blockSignals(True)
     artifact_combo.clear()
-    artifact_combo.addItem(
-        "Select Artifact...",
-        None,
-    )
+    artifact_combo.addItem("Select Artifact...", None)
     artifact_combo.setCurrentIndex(0)
     artifact_combo.blockSignals(False)
 
-    soi_combo = (
-        dashboard.ui.comboBox_tsi_fe_input_soi
-    )
-
+    soi_combo = dashboard.ui.comboBox_tsi_fe_input_soi
     soi_combo.blockSignals(True)
     soi_combo.clear()
-    soi_combo.addItem(
-        "Select SOI...",
-        None,
-    )
+    soi_combo.addItem("Manual / No SOI", None)
     soi_combo.setCurrentIndex(0)
     soi_combo.blockSignals(False)
 
-    profile_combo = (
-        dashboard.ui.comboBox_tsi_fe_method_profile
-    )
-
+    profile_combo = dashboard.ui.comboBox_tsi_fe_method_profile
     profile_combo.blockSignals(True)
     profile_combo.clear()
-    profile_combo.addItems([
-        "Time Domain",
-        "Frequency Domain",
-        "Time + Frequency",
-        "All Available",
-        "Custom",
-    ])
-    profile_combo.setCurrentText(
-        "Time Domain"
-    )
+    profile_combo.addItems(["Time Domain", "Frequency Domain", "Time + Frequency", "All Available", "Custom"])
+    profile_combo.setCurrentText("Time Domain")
     profile_combo.blockSignals(False)
 
-    action_combo = (
-        dashboard.ui.comboBox_tsi_fe_method_action
-    )
-
+    action_combo = dashboard.ui.comboBox_tsi_fe_method_action
     action_combo.blockSignals(True)
     action_combo.clear()
     action_combo.blockSignals(False)
@@ -294,64 +167,24 @@ def initialize_tsi_feature_extractor_controls(
     dashboard.tsi_fe_method_actions = []
     dashboard.tsi_fe_selected_plugin = ""
     dashboard.tsi_fe_selected_action = ""
-
     dashboard.tsi_fe_action_query_pending = False
     dashboard.tsi_fe_action_query_context = ""
     dashboard.tsi_fe_action_query_node_uid = ""
+    clear_tsi_fe_method_parameter_controls(dashboard)
 
-    clear_tsi_fe_method_parameter_controls(
-        dashboard
-    )
+    dashboard.ui.label_tsi_fe_workflow_profile.setText(profile_combo.currentText())
+    dashboard.ui.label_tsi_fe_workflow_action.setText("—")
 
-    dashboard.ui.label_tsi_fe_workflow_profile.setText(
-        profile_combo.currentText()
-    )
+    _tsi_fe_set_input_folder(dashboard, os.path.join(fissure.utils.FISSURE_ROOT, "Conditioner Data", "Output"))
+    if not dashboard.ui.textEdit_tsi_fe_file_sample_rate.toPlainText().strip():
+        dashboard.ui.textEdit_tsi_fe_file_sample_rate.setPlainText("1")
 
-    dashboard.ui.label_tsi_fe_workflow_action.setText(
-        "—"
-    )
+    dashboard.ui.radioButton_tsi_fe_input_extensions_all.setChecked(True)
+    dashboard.ui.textEdit_tsi_fe_input_extensions.setEnabled(False)
+    dashboard.ui.listWidget_tsi_fe_input_files.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+    dashboard.ui.stackedWidget_tsi_fe_input.setCurrentIndex(0)
 
-    default_input_folder = os.path.join(
-        fissure.utils.FISSURE_ROOT,
-        "Conditioner Data",
-        "Output",
-    )
-
-    _tsi_fe_set_input_folder(
-        dashboard,
-        default_input_folder,
-    )
-
-    sample_rate_text = (
-        dashboard.ui.textEdit_tsi_fe_file_sample_rate
-        .toPlainText()
-        .strip()
-    )
-
-    if not sample_rate_text:
-        dashboard.ui.textEdit_tsi_fe_file_sample_rate.setPlainText(
-            "1"
-        )
-
-    dashboard.ui.radioButton_tsi_fe_input_extensions_all.setChecked(
-        True
-    )
-
-    dashboard.ui.textEdit_tsi_fe_input_extensions.setEnabled(
-        False
-    )
-
-    dashboard.ui.listWidget_tsi_fe_input_files.setSelectionMode(
-        QtWidgets.QAbstractItemView.ExtendedSelection
-    )
-
-    # Files / Folder = page 0
-    # Artifact = page 1
-    # SOI = page 2
-    dashboard.ui.stackedWidget_tsi_fe_input.setCurrentIndex(
-        0
-    )
-
+    refresh_tsi_fe_input_sois(dashboard)
     _slotTSI_FE_InputSourceChanged(dashboard)
     _tsi_fe_refresh_file_list_from_path(dashboard)
     _tsi_fe_update_preview_gate(dashboard)
@@ -589,88 +422,42 @@ def _tsi_fe_update_input_ribbon(
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_InputSourceChanged(
-    dashboard: QtCore.QObject,
-):
-    """Handle Feature Extractor input-source switching and locality rules."""
+def _slotTSI_FE_InputSourceChanged(dashboard: QtCore.QObject):
+    """Apply source-page, selection, locality, and input-list refresh state."""
     source_combo = dashboard.ui.comboBox_tsi_fe_input_source
     source = _tsi_fe_current_source(dashboard)
 
-    if (
-        _tsi_fe_selected_node_is_remote(dashboard)
-        and source in {"Files", "Folder"}
-    ):
+    if _tsi_fe_selected_node_is_remote(dashboard) and source in {"Files", "Folder"}:
         artifact_index = source_combo.findText("Artifact")
-
         if artifact_index >= 0:
             source_combo.blockSignals(True)
             source_combo.setCurrentIndex(artifact_index)
             source_combo.blockSignals(False)
-
         source = "Artifact"
 
-    page_by_source = {
-        "Files": 0,
-        "Folder": 0,
-        "Artifact": 1,
-        "SOI": 2,
-    }
-
-    dashboard.ui.stackedWidget_tsi_fe_input.setCurrentIndex(
-        page_by_source.get(source, 0)
-    )
-
+    dashboard.ui.stackedWidget_tsi_fe_input.setCurrentIndex({"Files": 0, "Folder": 0, "Artifact": 1}.get(source, 0))
     list_widget = dashboard.ui.listWidget_tsi_fe_input_files
 
     if source == "Files":
-        list_widget.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
-
+        list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        list_widget.clear()
+        _tsi_fe_refresh_file_list_from_path(dashboard)
     elif source == "Folder":
-        # One highlighted row remains available for Preview IQ only.
-        # The run set is every visible filtered row, independent of selection.
-        list_widget.setSelectionMode(
-            QtWidgets.QAbstractItemView.SingleSelection
-        )
-
-        if list_widget.count() > 0 and list_widget.currentRow() < 0:
-            list_widget.setCurrentRow(0)
-
+        list_widget.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        list_widget.clear()
+        _tsi_fe_refresh_file_list_from_path(dashboard)
     elif source == "Artifact":
-        list_widget.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
+        list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         list_widget.clear()
         refresh_tsi_fe_input_artifacts(dashboard)
-
-    elif source == "SOI":
-        list_widget.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
-        list_widget.clear()
-        refresh_tsi_fe_input_sois(dashboard)
-
     else:
-        list_widget.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
         list_widget.clear()
 
-    local_input_controls_enabled = bool(
-        source in {"Files", "Folder"}
-        and not _tsi_fe_selected_node_is_remote(dashboard)
-    )
-
-    for widget_name in (
-        "pushButton_tsi_fe_input_folder",
-        "pushButton_tsi_fe_input_refresh",
-        "textEdit_tsi_fe_file_path",
-    ):
+    local_enabled = bool(source in {"Files", "Folder"} and not _tsi_fe_selected_node_is_remote(dashboard))
+    for widget_name in ("pushButton_tsi_fe_input_folder", "pushButton_tsi_fe_input_refresh", "textEdit_tsi_fe_file_path"):
         widget = getattr(dashboard.ui, widget_name, None)
-
         if widget is not None:
-            widget.setEnabled(local_input_controls_enabled)
+            widget.setEnabled(local_enabled)
 
     clear_tsi_fe_method_actions(dashboard)
     _tsi_fe_update_input_ribbon(dashboard)
@@ -741,47 +528,14 @@ def _slotTSI_FE_InputPathEdited(dashboard: QtCore.QObject):
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_InputExtensionsAllClicked(
-    dashboard: QtCore.QObject,
-):
-    """
-    Shows every resolved file for local and managed inputs.
-    """
-    dashboard.ui.textEdit_tsi_fe_input_extensions.setEnabled(
-        False
-    )
-
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    if source in {
-        "Files",
-        "Folder",
-    }:
-        _tsi_fe_refresh_file_list_from_path(
-            dashboard
-        )
-
+def _slotTSI_FE_InputExtensionsAllClicked(dashboard: QtCore.QObject):
+    """Show all resolved files for the current local or Artifact input."""
+    dashboard.ui.textEdit_tsi_fe_input_extensions.setEnabled(False)
+    source = _tsi_fe_current_source(dashboard)
+    if source in {"Files", "Folder"}:
+        _tsi_fe_refresh_file_list_from_path(dashboard)
     elif source == "Artifact":
-        _tsi_fe_render_managed_file_list(
-            dashboard,
-            getattr(
-                dashboard,
-                "tsi_fe_selected_input_artifact_files",
-                [],
-            ),
-        )
-
-    elif source == "SOI":
-        _tsi_fe_render_managed_file_list(
-            dashboard,
-            getattr(
-                dashboard,
-                "tsi_fe_selected_input_soi_files",
-                [],
-            ),
-        )
+        _tsi_fe_render_managed_file_list(dashboard, getattr(dashboard, "tsi_fe_selected_input_artifact_files", []))
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -801,49 +555,15 @@ def _slotTSI_FE_InputExtensionsCustomClicked(
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_InputExtensionsEdited(
-    dashboard: QtCore.QObject,
-):
-    """
-    Reapplies the active custom extension filter.
-    """
-    if not (
-        dashboard.ui.radioButton_tsi_fe_input_extensions_custom
-        .isChecked()
-    ):
+def _slotTSI_FE_InputExtensionsEdited(dashboard: QtCore.QObject):
+    """Reapply the active custom extension filter."""
+    if not dashboard.ui.radioButton_tsi_fe_input_extensions_custom.isChecked():
         return
-
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    if source in {
-        "Files",
-        "Folder",
-    }:
-        _tsi_fe_refresh_file_list_from_path(
-            dashboard
-        )
-
+    source = _tsi_fe_current_source(dashboard)
+    if source in {"Files", "Folder"}:
+        _tsi_fe_refresh_file_list_from_path(dashboard)
     elif source == "Artifact":
-        _tsi_fe_render_managed_file_list(
-            dashboard,
-            getattr(
-                dashboard,
-                "tsi_fe_selected_input_artifact_files",
-                [],
-            ),
-        )
-
-    elif source == "SOI":
-        _tsi_fe_render_managed_file_list(
-            dashboard,
-            getattr(
-                dashboard,
-                "tsi_fe_selected_input_soi_files",
-                [],
-            ),
-        )
+        _tsi_fe_render_managed_file_list(dashboard, getattr(dashboard, "tsi_fe_selected_input_artifact_files", []))
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -858,59 +578,23 @@ def _slotTSI_FE_InputSelectionChanged(
     update_tsi_fe_run_start_state(dashboard)
 
 
-def _tsi_fe_selected_input_file(
-    dashboard: QtCore.QObject,
-) -> str:
-    """
-    Returns the highlighted Feature Extractor input file.
-
-    Files / Folder rows resolve from the selected local folder.
-
-    Artifact / SOI rows are expected to store their resolved local path in
-    Qt.UserRole once managed-input population is implemented.
-    """
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    current_item = (
-        dashboard.ui.listWidget_tsi_fe_input_files
-        .currentItem()
-    )
-
+def _tsi_fe_selected_input_file(dashboard: QtCore.QObject) -> str:
+    """Return the highlighted local path when the Dashboard has one."""
+    source = _tsi_fe_current_source(dashboard)
+    current_item = dashboard.ui.listWidget_tsi_fe_input_files.currentItem()
     if current_item is None:
         return ""
 
-    if source in {
-        "Artifact",
-        "SOI",
-    }:
-        item_data = current_item.data(
-            QtCore.Qt.UserRole
-        )
-
+    if source == "Artifact":
+        item_data = current_item.data(QtCore.Qt.UserRole)
         if isinstance(item_data, dict):
-            return str(
-                item_data.get("path", "")
-                or ""
-            ).strip()
-
+            return str(item_data.get("path", "") or "").strip()
         return ""
 
-    folder_path = _tsi_fe_get_input_folder(
-        dashboard
-    )
-
+    folder_path = _tsi_fe_get_input_folder(dashboard)
     if not folder_path:
         return ""
-
-    return os.path.join(
-        folder_path,
-        str(
-            current_item.text()
-            or ""
-        ).strip(),
-    )
+    return os.path.join(folder_path, str(current_item.text() or "").strip())
 
 
 def _tsi_fe_update_preview_gate(
@@ -985,31 +669,13 @@ def _tsi_fe_profile_tag(dashboard: QtCore.QObject) -> str:
     return tags.get(profile, "")
 
 
-def _tsi_fe_source_tag(
-    dashboard: QtCore.QObject,
-) -> str:
-    """
-    Returns the plugin-action source compatibility tag.
-
-    Artifact and SOI inputs are resolved into ordinary file paths before the
-    selected Feature Extractor action runs. They therefore do not require a
-    dedicated action tag.
-    """
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    tags = {
+def _tsi_fe_source_tag(dashboard: QtCore.QObject) -> str:
+    """Return the plugin-action source compatibility tag."""
+    return {
         "Files": "tsi.feature_extractor.source.file",
         "Folder": "tsi.feature_extractor.source.folder",
-        "Artifact": "",
-        "SOI": "",
-    }
-
-    return tags.get(
-        source,
-        "",
-    )
+        "Artifact": "tsi.feature_extractor.source.artifact",
+    }.get(_tsi_fe_current_source(dashboard), "")
 
 
 def _tsi_fe_update_method_ribbon(dashboard: QtCore.QObject):
@@ -1666,101 +1332,125 @@ def _tsi_fe_selected_node_display_name(
     return node_uid
 
 
-def update_tsi_fe_run_node(
-    dashboard: QtCore.QObject,
-):
-    """
-    Mirrors the Dashboard-selected Sensor Node into Card 3 and the ribbon.
-    """
-    node_name = _tsi_fe_selected_node_display_name(dashboard)
+def reset_tsi_fe_for_selected_node_change(dashboard: QtCore.QObject):
+    """Reset node-bound Feature Extractor state after the selected node changes."""
+    if bool(getattr(dashboard, "tsi_fe_running", False)):
+        dashboard.logger.warning(
+            "[Feature Extractor] Selected Sensor Node changed while a Feature run was active; "
+            "the Dashboard is detaching from the previous run without stopping that node operation."
+        )
 
-    dashboard.ui.label2_tsi_fe_run_node.setText(node_name)
-    dashboard.ui.label_tsi_fe_workflow_node.setText(node_name)
+    _tsi_fe_stop_result_timer(dashboard)
+    clear_tsi_fe_method_actions(dashboard)
+
+    soi_combo = dashboard.ui.comboBox_tsi_fe_input_soi
+    soi_combo.blockSignals(True)
+    if soi_combo.count() > 0:
+        soi_combo.setCurrentIndex(0)
+    soi_combo.blockSignals(False)
+    dashboard.tsi_fe_selected_input_soi = {}
+
+    artifact_combo = dashboard.ui.comboBox_tsi_fe_input_artifact
+    artifact_combo.blockSignals(True)
+    artifact_combo.clear()
+    artifact_combo.addItem("Select Artifact...", None)
+    artifact_combo.setCurrentIndex(0)
+    artifact_combo.blockSignals(False)
+    dashboard.tsi_fe_input_artifacts = []
+    dashboard.tsi_fe_selected_input_artifact = {}
+    dashboard.tsi_fe_selected_input_artifact_files = []
+    dashboard.ui.listWidget_tsi_fe_input_files.clear()
+
+    dashboard.tsi_fe_running = False
+    dashboard.tsi_fe_started_at = None
+    dashboard.tsi_fe_completed_at = None
+    dashboard.tsi_fe_operation_id = ""
+    dashboard.tsi_fe_source_operation_id = ""
+    dashboard.tsi_fe_artifact_id = ""
+    dashboard.tsi_fe_expected_feature_path = ""
+    dashboard.tsi_fe_expected_report_path = ""
+    dashboard.tsi_fe_result_feature_path = ""
+    dashboard.tsi_fe_result_report_path = ""
+    dashboard.tsi_fe_auto_download_artifact_id = ""
+    dashboard.tsi_fe_result_saved_to_soi = False
+    dashboard.tsi_fe_result_rows = []
+    dashboard.tsi_fe_result_feature_names = []
+    dashboard.tsi_fe_result_report = {}
+
+    table = dashboard.ui.tableWidget_tsi_fe_results
+    table.clear()
+    table.setRowCount(0)
+    table.setColumnCount(0)
+
+    dashboard.ui.label2_tsi_fe_run_artifact_id.setText("—")
+    dashboard.ui.label2_tsi_fe_run_status.setText("Idle")
+    dashboard.ui.progressBar_tsi_fe_run_progress.setRange(0, 100)
+    dashboard.ui.progressBar_tsi_fe_run_progress.setValue(0)
+    dashboard.ui.label2_tsi_fe_run_started.setText("—")
+    dashboard.ui.label2_tsi_fe_run_completed.setText("—")
+    dashboard.ui.label2_tsi_fe_run_duration.setText("—")
+    _tsi_fe_set_run_button_state(dashboard, running=False)
+    _tsi_fe_update_artifact_download_button(dashboard)
+
+    refresh_tsi_fe_input_sois(dashboard)
+    if _tsi_fe_current_source(dashboard) == "Artifact":
+        refresh_tsi_fe_input_artifacts(dashboard)
+
+    _tsi_fe_update_input_ribbon(dashboard)
+    _tsi_fe_update_method_ribbon(dashboard)
+    _tsi_fe_update_result_button_state(dashboard)
+    _tsi_fe_update_preview_gate(dashboard)
+    _tsi_fe_update_destination_state(dashboard)
+    update_tsi_fe_run_start_state(dashboard)
+
+
+def update_tsi_fe_run_node(dashboard: QtCore.QObject):
+    """Mirror the selected Sensor Node and reset node-bound state on real node changes."""
+    selected_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    previous_uid = str(getattr(dashboard, "tsi_fe_last_selected_node_uid", "") or "").strip()
+
+    if previous_uid and selected_uid and previous_uid != selected_uid:
+        reset_tsi_fe_for_selected_node_change(dashboard)
+
+    if selected_uid:
+        dashboard.tsi_fe_last_selected_node_uid = selected_uid
+
+    dashboard.ui.label_tsi_fe_workflow_node.setText(_tsi_fe_selected_node_display_name(dashboard))
+
+    if not (previous_uid and selected_uid and previous_uid != selected_uid):
+        refresh_tsi_fe_input_sois(dashboard)
+        if _tsi_fe_current_source(dashboard) == "Artifact":
+            refresh_tsi_fe_input_artifacts(dashboard)
 
     update_tsi_fe_run_start_state(dashboard)
 
-    refresh_tsi_fe_run_sois(dashboard)
 
-
-def _tsi_fe_destination_is_available(
-    dashboard: QtCore.QObject,
-    destination: str,
-) -> tuple:
+def _tsi_fe_destination_is_available(dashboard: QtCore.QObject, destination: str) -> tuple:
     """Return destination availability and a user-facing reason."""
     destination = str(destination or "").strip()
-
-    if (
-        destination == "Local Results"
-        and _tsi_fe_selected_node_is_remote(dashboard)
-    ):
-        return (
-            False,
-            "Local Results are available only when the local Sensor Node is selected.",
-        )
-
-    if destination == "Attach to Existing SOI":
-        soi_context = _tsi_fe_selected_soi_context(dashboard)
-        if not soi_context:
-            return False, "Select an SOI in Card 3."
-
+    if destination not in {"Local Results", "Artifact"}:
+        return False, "Select Local Results or Artifact."
+    if destination == "Local Results" and _tsi_fe_selected_node_is_remote(dashboard):
+        return False, "Local Results are available only when the local Sensor Node is selected."
     return True, ""
 
 
-def _tsi_fe_update_destination_state(
-    dashboard: QtCore.QObject,
-):
-    """
-    Updates Card 3, ribbon, SOI controls, and destination readiness.
-    """
-    destination = str(
-        dashboard.ui.comboBox_tsi_fe_run_destination.currentText()
-        or ""
-    ).strip()
-
-    dashboard.ui.label_tsi_fe_workflow_output_type.setText(
-        destination if destination else "—"
-    )
-
-    _tsi_fe_update_soi_selector_state(
-        dashboard
-    )
-
-    available, reason = _tsi_fe_destination_is_available(
-        dashboard,
-        destination,
-    )
-
-    dashboard.ui.comboBox_tsi_fe_run_destination.setToolTip(
-        reason if reason else destination
-    )
-
+def _tsi_fe_update_destination_state(dashboard: QtCore.QObject):
+    """Update the output ribbon and destination readiness."""
+    destination = str(dashboard.ui.comboBox_tsi_fe_run_destination.currentText() or "").strip()
+    dashboard.ui.label_tsi_fe_workflow_output_type.setText(destination if destination else "—")
+    available, reason = _tsi_fe_destination_is_available(dashboard, destination)
+    dashboard.ui.comboBox_tsi_fe_run_destination.setToolTip(reason if reason else destination)
     dashboard.tsi_fe_destination_available = available
     dashboard.tsi_fe_destination_unavailable_reason = reason
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_RunDestinationChanged(
-    dashboard: QtCore.QObject,
-):
-    destination_combo = dashboard.ui.comboBox_tsi_fe_run_destination
-    destination = str(destination_combo.currentText() or "").strip()
-
-    if (
-        destination == "Local Results"
-        and _tsi_fe_selected_node_is_remote(dashboard)
-    ):
-        managed_index = destination_combo.findText("New Analysis Artifact")
-        if managed_index >= 0:
-            destination_combo.blockSignals(True)
-            destination_combo.setCurrentIndex(managed_index)
-            destination_combo.blockSignals(False)
-        destination = str(destination_combo.currentText() or "").strip()
-
-    if destination == "Attach to Existing SOI":
-        refresh_tsi_fe_run_sois(dashboard)
-    else:
-        _tsi_fe_update_destination_state(dashboard)
-        update_tsi_fe_run_start_state(dashboard)
+def _slotTSI_FE_RunDestinationChanged(dashboard: QtCore.QObject):
+    """Apply destination state and refresh Start/SOI-result gating."""
+    _tsi_fe_update_destination_state(dashboard)
+    _tsi_fe_update_result_button_state(dashboard)
+    update_tsi_fe_run_start_state(dashboard)
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -1852,92 +1542,43 @@ def _tsi_fe_update_artifact_download_button(
         )
 
 
-def initialize_tsi_fe_run_controls(
-    dashboard: QtCore.QObject,
-):
-    """
-    Initializes the Feature Extractor Run Extraction controls.
-    """
+def initialize_tsi_fe_run_controls(dashboard: QtCore.QObject):
+    """Initialize Feature Extractor execution state."""
     dashboard.tsi_fe_running = False
     dashboard.tsi_fe_started_at = None
     dashboard.tsi_fe_completed_at = None
-
     dashboard.tsi_fe_operation_id = ""
+    dashboard.tsi_fe_source_operation_id = ""
     dashboard.tsi_fe_artifact_id = ""
-
     dashboard.tsi_fe_expected_feature_path = ""
     dashboard.tsi_fe_expected_report_path = ""
-
     dashboard.tsi_fe_result_feature_path = ""
     dashboard.tsi_fe_result_report_path = ""
+    dashboard.tsi_fe_auto_download_artifact_id = ""
+    dashboard.tsi_fe_result_saved_to_soi = False
 
-    description = (
-        dashboard.ui.textEdit_tsi_fe_run_description
-        .toPlainText()
-        .strip()
-    )
-
+    description = dashboard.ui.textEdit_tsi_fe_run_description.toPlainText().strip()
     if not description:
         description = "Feature extraction results"
-
-        dashboard.ui.textEdit_tsi_fe_run_description.setPlainText(
-            description
-        )
-
+        dashboard.ui.textEdit_tsi_fe_run_description.setPlainText(description)
     dashboard.tsi_fe_run_description = description
+
+    destination_combo = dashboard.ui.comboBox_tsi_fe_run_destination
+    destination_combo.blockSignals(True)
+    destination_combo.clear()
+    destination_combo.addItems(["Local Results", "Artifact"])
+    destination_combo.setCurrentText("Artifact")
+    destination_combo.blockSignals(False)
 
     dashboard.ui.label2_tsi_fe_run_artifact_id.setText("—")
     dashboard.ui.label2_tsi_fe_run_status.setText("Idle")
-
-    _tsi_fe_update_artifact_download_button(dashboard)
-
-    dashboard.ui.progressBar_tsi_fe_run_progress.setRange(
-        0,
-        100,
-    )
+    dashboard.ui.progressBar_tsi_fe_run_progress.setRange(0, 100)
     dashboard.ui.progressBar_tsi_fe_run_progress.setValue(0)
-
     dashboard.ui.label2_tsi_fe_run_started.setText("—")
     dashboard.ui.label2_tsi_fe_run_completed.setText("—")
     dashboard.ui.label2_tsi_fe_run_duration.setText("—")
-
-    _tsi_fe_set_run_button_state(
-        dashboard,
-        running=False,
-    )
-
-    soi_combo = dashboard.ui.comboBox_tsi_fe_run_soi
-
-    soi_combo.blockSignals(True)
-    soi_combo.clear()
-    soi_combo.addItem(
-        "Select SOI...",
-        None,
-    )
-    soi_combo.blockSignals(False)
-
-    refresh_icon_path = os.path.join(
-        fissure.utils.UI_DIR,
-        "Icons",
-        "refresh.png",
-    )
-
-    if os.path.isfile(refresh_icon_path):
-        refresh_button = (
-            dashboard.ui.pushButton_tsi_fe_run_soi_refresh
-        )
-        refresh_button.setIcon(
-            QtGui.QIcon(refresh_icon_path)
-        )
-        refresh_button.setText("")
-        refresh_button.setIconSize(
-            QtCore.QSize(18, 18)
-        )
-
-    _tsi_fe_update_soi_selector_state(
-        dashboard
-    )
-
+    _tsi_fe_set_run_button_state(dashboard, running=False)
+    _tsi_fe_update_artifact_download_button(dashboard)
     update_tsi_fe_run_node(dashboard)
     _tsi_fe_update_destination_state(dashboard)
     update_tsi_fe_run_start_state(dashboard)
@@ -1981,181 +1622,45 @@ def _tsi_fe_local_input_ready(
     return False
 
 
-def _tsi_fe_managed_input_ready(
-    dashboard: QtCore.QObject,
-) -> bool:
-    """
-    Returns True when the selected managed input has enough control-plane
-    identity to submit.
-
-    Local execution still requires selected Dashboard-local files because the
-    current local operation consumes paths.
-
-    Remote execution requires only Artifact/SOI identity plus at least one
-    selected managed file row. The Sensor Node will validate local payload
-    availability during execution.
-    """
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    remote_selected = (
-        _tsi_fe_selected_node_is_remote(
-            dashboard
-        )
-    )
-
-    selected_items = (
-        dashboard.ui.listWidget_tsi_fe_input_files
-        .selectedItems()
-    )
-
-    if source == "Artifact":
-        context = getattr(
-            dashboard,
-            "tsi_fe_selected_input_artifact",
-            {},
-        )
-
-        if not isinstance(context, dict):
-            return False
-
-        artifact_id = str(
-            context.get("artifact_id", "")
-            or ""
-        ).strip()
-
-        if remote_selected:
-            return bool(
-                artifact_id
-                and selected_items
-            )
-
-        has_local_file = any(
-            isinstance(
-                item.data(QtCore.Qt.UserRole),
-                dict,
-            )
-            and os.path.isfile(
-                str(
-                    item.data(
-                        QtCore.Qt.UserRole
-                    ).get("path", "")
-                    or ""
-                )
-            )
-            for item in selected_items
-        )
-
-        return bool(
-            artifact_id
-            and has_local_file
-        )
-
-    if source == "SOI":
-        context = getattr(
-            dashboard,
-            "tsi_fe_selected_input_soi",
-            {},
-        )
-
-        if not isinstance(context, dict):
-            return False
-
-        soi_id = str(
-            context.get("soi_id", "")
-            or ""
-        ).strip()
-
-        source_artifact_ids = (
-            _tsi_fe_soi_source_artifact_ids(
-                context.get("record", {})
-            )
-        )
-
-        if remote_selected:
-            return bool(
-                soi_id
-                and source_artifact_ids
-                and selected_items
-            )
-
-        has_local_file = any(
-            isinstance(
-                item.data(QtCore.Qt.UserRole),
-                dict,
-            )
-            and os.path.isfile(
-                str(
-                    item.data(
-                        QtCore.Qt.UserRole
-                    ).get("path", "")
-                    or ""
-                )
-            )
-            for item in selected_items
-        )
-
-        return bool(
-            soi_id
-            and has_local_file
-        )
-
-    return False
+def _tsi_fe_managed_input_ready(dashboard: QtCore.QObject) -> bool:
+    """Return True when an Artifact and at least one manifest member are selected."""
+    if _tsi_fe_current_source(dashboard) != "Artifact":
+        return False
+    context = getattr(dashboard, "tsi_fe_selected_input_artifact", {})
+    if not isinstance(context, dict):
+        return False
+    artifact_id = str(context.get("artifact_id", "") or "").strip()
+    return bool(artifact_id and dashboard.ui.listWidget_tsi_fe_input_files.selectedItems())
 
 
-def _tsi_fe_run_readiness(
-    dashboard: QtCore.QObject,
-) -> tuple:
+def _tsi_fe_run_readiness(dashboard: QtCore.QObject) -> tuple:
     """Return Feature Extractor readiness and a user-facing reason."""
     if bool(getattr(dashboard, "tsi_fe_running", False)):
         return True, ""
-
     if not _tsi_fe_selected_node_available(dashboard):
         return False, "Select an available Sensor Node."
 
     source = _tsi_fe_current_source(dashboard)
-
     if source in {"Files", "Folder"}:
         if not selected_node_is_local(dashboard):
-            return (
-                False,
-                "Files and Folder inputs require the local Sensor Node.",
-            )
+            return False, "Files and Folder inputs require the local Sensor Node."
         if not _tsi_fe_local_input_ready(dashboard):
             return False, "Select valid local input data."
-
-    elif source in {"Artifact", "SOI"}:
+    elif source == "Artifact":
         if not _tsi_fe_managed_input_ready(dashboard):
-            return False, f"Select a {source} input."
-
+            return False, "Select an Artifact and at least one IQ member."
     else:
         return False, "Select a supported input source."
 
     record = dashboard.ui.comboBox_tsi_fe_method_action.currentData()
     if not isinstance(record, dict):
         return False, "Query and select a Feature Extractor action."
-
-    plugin_name = str(record.get("plugin", "") or "").strip()
-    action_name = str(record.get("action", "") or "").strip()
-    if not plugin_name or not action_name:
+    if not str(record.get("plugin", "") or "").strip() or not str(record.get("action", "") or "").strip():
         return False, "Query and select a Feature Extractor action."
-
     if not bool(getattr(dashboard, "tsi_fe_method_customized", False)):
-        return False, "Query the selected action parameters."
+        return False, "Customize the selected action parameters."
 
-    destination = str(
-        dashboard.ui.comboBox_tsi_fe_run_destination.currentText() or ""
-    ).strip()
-
-    destination_ready, destination_reason = _tsi_fe_destination_is_available(
-        dashboard,
-        destination,
-    )
-    if not destination_ready:
-        return False, destination_reason
-
-    return True, ""
+    return _tsi_fe_destination_is_available(dashboard, dashboard.ui.comboBox_tsi_fe_run_destination.currentText())
 
 
 def update_tsi_fe_run_start_state(
@@ -2239,143 +1744,29 @@ def _tsi_fe_collect_method_parameters(
     return parameters
 
 
-def _tsi_fe_local_result_paths(
-    dashboard: QtCore.QObject,
-    destination: str = "",
-    operation_id: str = "",
-) -> tuple:
-    """
-    Returns the node-local result files that the Dashboard should poll.
+def _tsi_fe_local_result_paths(dashboard: QtCore.QObject, destination: str = "", operation_id: str = "") -> tuple:
+    """Return Dashboard-visible result paths for local execution."""
+    destination = str(destination or dashboard.ui.comboBox_tsi_fe_run_destination.currentText() or "Local Results").strip()
+    source = _tsi_fe_current_source(dashboard)
 
-    Local Results:
-        Files / Folder:
-            Results are written into the selected local input folder.
-
-        Artifact / SOI:
-            Results are written into the resolved managed-input file folder.
-
-    Managed analysis destinations:
-        Results are written into the analysis operation artifact folder.
-    """
-    destination = str(
-        destination
-        or dashboard.ui.comboBox_tsi_fe_run_destination.currentText()
-        or "Local Results"
-    ).strip()
-
-    managed_analysis_destinations = {
-        "New Analysis Artifact",
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    }
-
-    if destination in managed_analysis_destinations:
-        operation_id = str(
-            operation_id
-            or getattr(
-                dashboard,
-                "tsi_fe_operation_id",
-                "",
-            )
-            or ""
-        ).strip()
-
+    if destination == "Artifact":
+        operation_id = str(operation_id or getattr(dashboard, "tsi_fe_operation_id", "") or "").strip()
         if not operation_id:
             return "", ""
-
-        folder = os.path.join(
-            fissure.utils.FISSURE_ROOT,
-            "artifacts",
-            operation_id,
-            "files",
-        )
-
-    else:
-        source = _tsi_fe_current_source(
-            dashboard
-        )
-
-        if source in {
-            "Files",
-            "Folder",
-        }:
-            folder = _tsi_fe_get_input_folder(
-                dashboard
-            )
-
-        elif source in {
-            "Artifact",
-            "SOI",
-        }:
-            selected_items = (
-                dashboard.ui.listWidget_tsi_fe_input_files
-                .selectedItems()
-            )
-
-            resolved_paths = []
-
-            for item in selected_items:
-                item_data = item.data(
-                    QtCore.Qt.UserRole
-                )
-
-                if not isinstance(
-                    item_data,
-                    dict,
-                ):
-                    continue
-
-                filepath = str(
-                    item_data.get(
-                        "path",
-                        "",
-                    )
-                    or ""
-                ).strip()
-
-                if (
-                    filepath
-                    and os.path.isfile(filepath)
-                ):
-                    resolved_paths.append(
-                        filepath
-                    )
-
-            if not resolved_paths:
-                return "", ""
-
-            parent_folders = {
-                os.path.dirname(path)
-                for path in resolved_paths
-            }
-
-            if len(parent_folders) != 1:
-                dashboard.logger.error(
-                    "[Feature Extractor] Local Results requires "
-                    "managed input files from one folder."
-                )
-                return "", ""
-
-            folder = next(
-                iter(parent_folders)
-            )
-
-        else:
+        folder = os.path.join(fissure.utils.FISSURE_ROOT, "artifacts", operation_id, "files")
+    elif source == "Artifact":
+        operation_id = str(operation_id or getattr(dashboard, "tsi_fe_operation_id", "") or "").strip()
+        if not operation_id:
             return "", ""
+        folder = os.path.join(fissure.utils.ARTIFACT_NODE_DIR, operation_id, "files")
+    elif source in {"Files", "Folder"}:
+        folder = _tsi_fe_get_input_folder(dashboard)
+    else:
+        return "", ""
 
     if not folder:
         return "", ""
-
-    return (
-        os.path.join(
-            folder,
-            "tsi_features.json",
-        ),
-        os.path.join(
-            folder,
-            "feature_extraction_report.json",
-        ),
-    )
+    return os.path.join(folder, "tsi_features.json"), os.path.join(folder, "feature_extraction_report.json")
 
 
 def _tsi_fe_collect_local_input_parameters(
@@ -2715,395 +2106,116 @@ def _tsi_fe_start_local_result_timer(
 
 
 @qasync.asyncSlot(QtCore.QObject)
-async def _slotTSI_FE_RunStartStopClicked(
-    dashboard: QtCore.QObject,
-):
-    """
-    Starts or stops the current Feature Extractor run.
+async def _slotTSI_FE_RunStartStopClicked(dashboard: QtCore.QObject):
+    """Start or stop Feature extraction with Artifact-first managed input/output."""
+    uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    if not uid:
+        update_tsi_fe_run_start_state(dashboard)
+        return
 
-    Implemented combinations:
-        Files/Folder -> Local Results
-        Files/Folder -> New Analysis Artifact
-    """
-    uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
-    if bool(
-        getattr(
-            dashboard,
-            "tsi_fe_running",
-            False,
-        )
-    ):
-        dashboard.ui.label2_tsi_fe_run_status.setText(
-            "Stopping..."
-        )
-
+    if bool(getattr(dashboard, "tsi_fe_running", False)):
         try:
-            await dashboard.backend.tacticalNodeStop(
-                [uid]
-            )
-
-        except Exception as e:
-            dashboard.logger.error(
-                "[Feature Extractor] "
-                "Stop request failed: "
-                f"{e!r}"
-            )
-
-            _tsi_fe_finish_local_run(
-                dashboard,
-                status="Stop Failed",
-                progress=0,
-            )
-            return
-
-        _tsi_fe_finish_local_run(
-            dashboard,
-            status="Stopped",
-            progress=0,
-        )
+            await dashboard.backend.tacticalNodeStop([uid])
+        except Exception as error:
+            dashboard.logger.error(f"[Feature Extractor] Stop request failed: {error!r}")
+        _tsi_fe_finish_local_run(dashboard, status="Stopped", progress=0)
         return
 
-    ready, reason = _tsi_fe_run_readiness(
-        dashboard
-    )
-
+    ready, reason = _tsi_fe_run_readiness(dashboard)
     if not ready:
-        dashboard.logger.warning(
-            "[Feature Extractor] Cannot start: "
-            f"{reason}"
-        )
-
-        update_tsi_fe_run_start_state(
-            dashboard
-        )
+        dashboard.ui.label2_tsi_fe_run_status.setText(reason or "Not Ready")
+        update_tsi_fe_run_start_state(dashboard)
         return
 
-    destination = str(
-        dashboard.ui.comboBox_tsi_fe_run_destination.currentText()
-        or ""
-    ).strip()
-
-    implemented_destinations = {
-        "Local Results",
-        "New Analysis Artifact",
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    }
-
-    if destination not in implemented_destinations:
-        dashboard.logger.warning(
-            "[Feature Extractor] Destination "
-            "is not implemented yet: "
-            f"{destination!r}"
-        )
-
-        dashboard.ui.label2_tsi_fe_run_status.setText(
-            "Destination Not Implemented"
-        )
-        return
-
-    source = _tsi_fe_current_source(
-        dashboard
-    )
-
-    if source not in {
-        "Files",
-        "Folder",
-        "Artifact",
-        "SOI",
-    }:
-        dashboard.ui.label2_tsi_fe_run_status.setText(
-            "Input Source Not Implemented"
-        )
-        return
-
-    record = (
-        dashboard.ui.comboBox_tsi_fe_method_action
-        .currentData()
-    )
-
+    destination = str(dashboard.ui.comboBox_tsi_fe_run_destination.currentText() or "").strip()
+    source = _tsi_fe_current_source(dashboard)
+    record = dashboard.ui.comboBox_tsi_fe_method_action.currentData()
     if not isinstance(record, dict):
-        update_tsi_fe_run_start_state(
-            dashboard
-        )
+        return
+    plugin_name = str(record.get("plugin", "") or "").strip()
+    action_name = str(record.get("action", "") or "").strip()
+    parameters = _tsi_fe_collect_method_parameters(dashboard)
+
+    if source in {"Files", "Folder"}:
+        parameters.update(_tsi_fe_collect_local_input_parameters(dashboard))
+    elif source == "Artifact":
+        parameters.update(_tsi_fe_collect_artifact_input_parameters(dashboard))
+    else:
+        dashboard.ui.label2_tsi_fe_run_status.setText("Input Source Not Implemented")
         return
 
-    plugin_name = str(
-        record.get("plugin", "")
-        or ""
-    ).strip()
-
-    action_name = str(
-        record.get("action", "")
-        or ""
-    ).strip()
-
-    parameters = (
-        _tsi_fe_collect_method_parameters(
-            dashboard
-        )
-    )
-
-    remote_selected = (
-        _tsi_fe_selected_node_is_remote(
-            dashboard
-        )
-    )
-
-    if source in {
-        "Files",
-        "Folder",
-    }:
-        parameters.update(
-            _tsi_fe_collect_local_input_parameters(
-                dashboard
-            )
-        )
-
-    elif source == "Artifact":
-        if remote_selected:
-            parameters.update(
-                _tsi_fe_collect_remote_artifact_input_parameters(
-                    dashboard
-                )
-            )
-        else:
-            parameters.update(
-                _tsi_fe_collect_artifact_input_parameters(
-                    dashboard
-                )
-            )
-
-    elif source == "SOI":
-        if remote_selected:
-            parameters.update(
-                _tsi_fe_collect_remote_soi_input_parameters(
-                    dashboard
-                )
-            )
-        else:
-            parameters.update(
-                _tsi_fe_collect_soi_input_parameters(
-                    dashboard
-                )
-            )
-
-    parameters["description"] = (
-        dashboard.ui.textEdit_tsi_fe_run_description
-        .toPlainText()
-        .strip()
-    )
-
+    soi_context = _tsi_fe_selected_soi_context(dashboard)
+    parameters["input_soi_id"] = str(soi_context.get("soi_id", "") or "").strip() if soi_context else ""
+    parameters["input_soi_key"] = str(soi_context.get("soi_key", "") or "").strip() if soi_context else ""
+    parameters["input_soi_frequency_mhz"] = soi_context.get("frequency_mhz") if soi_context else None
+    parameters["description"] = dashboard.ui.textEdit_tsi_fe_run_description.toPlainText().strip()
     parameters["destination"] = destination
     parameters["source_id"] = uid
     parameters["node_uid"] = uid
 
-    soi_context = {}
-
-    if destination == "Attach to Existing SOI":
-        soi_context = _tsi_fe_selected_soi_context(
-            dashboard
-        )
-
-        if not soi_context:
-            dashboard.ui.label2_tsi_fe_run_status.setText(
-                "Select SOI"
-            )
-            update_tsi_fe_run_start_state(
-                dashboard
-            )
-            return
-
-        parameters["soi_id"] = (
-            soi_context["soi_id"]
-        )
-        parameters["soi_key"] = (
-            soi_context["soi_key"]
-        )
-        parameters["frequency_mhz"] = (
-            soi_context.get("frequency_mhz")
-        )
-    
-    if destination == "Create New SOI from Input":
-        frequency_mhz = await _tsi_fe_prompt_new_soi_frequency(
-            dashboard
-        )
-
-        if frequency_mhz is None:
-            dashboard.ui.label2_tsi_fe_run_status.setText(
-                "Idle"
-            )
-            update_tsi_fe_run_start_state(
-                dashboard
-            )
-            return
-
-        parameters["frequency_mhz"] = frequency_mhz
-
+    remote_selected = _tsi_fe_selected_node_is_remote(dashboard)
     operation_id = ""
     source_operation_id = ""
-
-    if destination in {
-        "New Analysis Artifact",
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    }:
+    if destination == "Artifact" or source == "Artifact":
         operation_id = str(uuid.uuid4())
         parameters["operation_id"] = operation_id
-
-    if destination in {
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    }:
+    if destination == "Artifact" and source in {"Files", "Folder"}:
         source_operation_id = str(uuid.uuid4())
-        parameters["source_operation_id"] = (
-            source_operation_id
-        )
+        parameters["source_operation_id"] = source_operation_id
 
-    if remote_selected:
-        feature_path = ""
-        report_path = ""
-
-    else:
-        feature_path, report_path = (
-            _tsi_fe_local_result_paths(
-                dashboard,
-                destination=destination,
-                operation_id=operation_id,
-            )
-        )
-
+    feature_path = report_path = ""
+    if not remote_selected and destination == "Local Results":
+        feature_path, report_path = _tsi_fe_local_result_paths(dashboard, destination=destination, operation_id=operation_id)
         if not feature_path or not report_path:
-            dashboard.ui.label2_tsi_fe_run_status.setText(
-                "Invalid Result Path"
-            )
+            dashboard.ui.label2_tsi_fe_run_status.setText("Invalid Result Path")
             return
 
     started_at = time.time()
-
-    # Clear previous detailed results.
     dashboard.tsi_fe_result_rows = []
     dashboard.tsi_fe_result_feature_names = []
     dashboard.tsi_fe_result_report = {}
     dashboard.tsi_fe_result_feature_path = ""
     dashboard.tsi_fe_result_report_path = ""
-
-    dashboard.ui.tableWidget_tsi_fe_results.clear()
-    dashboard.ui.tableWidget_tsi_fe_results.setRowCount(0)
-    dashboard.ui.tableWidget_tsi_fe_results.setColumnCount(0)
-
-    _tsi_fe_update_result_button_state(
-        dashboard
-    )
+    dashboard.tsi_fe_result_saved_to_soi = False
+    dashboard.tsi_fe_auto_download_artifact_id = ""
+    table = dashboard.ui.tableWidget_tsi_fe_results
+    table.clear(); table.setRowCount(0); table.setColumnCount(0)
+    _tsi_fe_update_result_button_state(dashboard)
 
     dashboard.tsi_fe_running = True
     dashboard.tsi_fe_started_at = started_at
     dashboard.tsi_fe_completed_at = None
     dashboard.tsi_fe_operation_id = operation_id
-    dashboard.tsi_fe_source_operation_id = (
-        source_operation_id
-    )
+    dashboard.tsi_fe_source_operation_id = source_operation_id
     dashboard.tsi_fe_artifact_id = ""
-
+    dashboard.tsi_fe_expected_feature_path = feature_path
+    dashboard.tsi_fe_expected_report_path = report_path
+    dashboard.ui.label2_tsi_fe_run_artifact_id.setText("—")
+    dashboard.ui.label2_tsi_fe_run_status.setText("Starting...")
+    dashboard.ui.progressBar_tsi_fe_run_progress.setRange(0, 0)
+    dashboard.ui.label2_tsi_fe_run_started.setText(_tsi_fe_format_timestamp(started_at))
+    dashboard.ui.label2_tsi_fe_run_completed.setText("—")
+    dashboard.ui.label2_tsi_fe_run_duration.setText("0.0 s")
+    _tsi_fe_set_run_button_state(dashboard, running=True)
     _tsi_fe_update_artifact_download_button(dashboard)
+    update_tsi_fe_run_start_state(dashboard)
 
-    dashboard.tsi_fe_expected_feature_path = (
-        feature_path
-    )
-    dashboard.tsi_fe_expected_report_path = (
-        report_path
-    )
-
-    dashboard.ui.label2_tsi_fe_run_artifact_id.setText(
-        "—"
-    )
-
-    dashboard.ui.label2_tsi_fe_run_status.setText(
-        "Starting..."
-    )
-
-    dashboard.ui.progressBar_tsi_fe_run_progress.setRange(
-        0,
-        0,
-    )
-
-    dashboard.ui.label2_tsi_fe_run_started.setText(
-        _tsi_fe_format_timestamp(
-            started_at
-        )
-    )
-
-    dashboard.ui.label2_tsi_fe_run_completed.setText(
-        "—"
-    )
-
-    dashboard.ui.label2_tsi_fe_run_duration.setText(
-        "0.0 s"
-    )
-
-    _tsi_fe_set_run_button_state(
-        dashboard,
-        running=True,
-    )
-
-    update_tsi_fe_run_start_state(
-        dashboard
-    )
-
-    if not remote_selected:
-        _tsi_fe_start_local_result_timer(
-            dashboard
-        )
+    if not remote_selected and destination == "Local Results":
+        _tsi_fe_start_local_result_timer(dashboard)
 
     dashboard.logger.info(
-        "[Feature Extractor] Starting run: "
-        f"uid={uid!r}, "
-        f"destination={destination!r}, "
-        f"operation_id={operation_id!r}, "
-        f"plugin={plugin_name!r}, "
-        f"action={action_name!r}, "
-        f"feature_path={feature_path!r}, "
-        f"report_path={report_path!r}, "
-        f"parameters={parameters!r}, "
-        f"frequency_mhz={parameters.get('frequency_mhz', '')!r}, "
-        f"soi_id={parameters.get('soi_id', '')!r}, "
-        f"source_operation_id={source_operation_id!r}, "
-        f"remote_selected={remote_selected!r}, "
-        f"managed_input={parameters.get('managed_input', {})!r}, "
+        "[Feature Extractor] Starting run: uid=%r destination=%r operation_id=%r plugin=%r action=%r "
+        "source=%r input_soi_id=%r managed_input=%r",
+        uid, destination, operation_id, plugin_name, action_name, source,
+        parameters.get("input_soi_id", ""), parameters.get("managed_input", {}),
     )
 
     try:
-        await dashboard.backend.tacticalNodeExecute(
-            [uid],
-            plugin_name,
-            action_name,
-            parameters,
-        )
-
-        dashboard.ui.label2_tsi_fe_run_status.setText(
-            "Running"
-        )
-
-    except Exception as e:
-        dashboard.logger.error(
-            "[Feature Extractor] "
-            "Start request failed: "
-            f"{e!r}"
-        )
-
-        _tsi_fe_finish_local_run(
-            dashboard,
-            status="Start Failed",
-            progress=0,
-        )
+        await dashboard.backend.tacticalNodeExecute([uid], plugin_name, action_name, parameters)
+        dashboard.ui.label2_tsi_fe_run_status.setText("Running")
+    except Exception as error:
+        dashboard.logger.error(f"[Feature Extractor] Start request failed: {error!r}")
+        _tsi_fe_finish_local_run(dashboard, status="Start Failed", progress=0)
 
 
 @qasync.asyncSlot(QtCore.QObject)
@@ -3428,81 +2540,42 @@ def _tsi_fe_selected_result(
     return result
 
 
-def _tsi_fe_update_result_button_state(
-    dashboard: QtCore.QObject,
-):
-    """
-    Enables only result actions supported by the currently loaded data.
-    """
+def _tsi_fe_update_result_button_state(dashboard: QtCore.QObject):
+    """Enable result actions supported by the loaded feature result set."""
     table = dashboard.ui.tableWidget_tsi_fe_results
     has_rows = table.rowCount() > 0
     selected_result = _tsi_fe_selected_result(dashboard)
+    selected_path = str(selected_result.get("path", "") or "").strip() if selected_result else ""
+    has_local_file = bool(selected_path and os.path.isfile(selected_path))
+    has_features = bool(getattr(dashboard, "tsi_fe_result_feature_names", []))
+    result_path = str(getattr(dashboard, "tsi_fe_result_report_path", "") or getattr(dashboard, "tsi_fe_result_feature_path", "") or "").strip()
+    has_result_folder = bool(result_path and os.path.isdir(os.path.dirname(result_path)))
+    artifact_id = str(getattr(dashboard, "tsi_fe_artifact_id", "") or "").strip()
+    saved = bool(getattr(dashboard, "tsi_fe_result_saved_to_soi", False))
+    soi_context = _tsi_fe_selected_soi_context(dashboard)
 
-    selected_path = ""
+    dashboard.ui.pushButton_tsi_fe_results_preview.setEnabled(has_local_file)
+    dashboard.ui.pushButton_tsi_fe_results_open_folder.setEnabled(has_result_folder)
+    dashboard.ui.pushButton_tsi_fe_results_export_csv.setEnabled(has_rows)
+    dashboard.ui.pushButton_tsi_fe_results_export_json.setEnabled(has_rows)
+    dashboard.ui.pushButton_tsi_fe_results_plot_feature.setEnabled(has_rows and has_features)
+    dashboard.ui.pushButton_tsi_fe_results_plot_distribution.setEnabled(has_rows and has_features)
 
-    if selected_result:
-        selected_path = str(
-            selected_result.get("path", "")
-            or ""
-        ).strip()
-
-    has_local_file = bool(
-        selected_path
-        and os.path.isfile(selected_path)
-    )
-
-    has_features = bool(
-        getattr(
-            dashboard,
-            "tsi_fe_result_feature_names",
-            [],
+    button = dashboard.ui.pushButton_tsi_fe_results_promote_to_soi
+    if saved:
+        button.setText("Saved to SOI")
+        button.setEnabled(False)
+        button.setToolTip("This Feature Analysis Artifact has already been saved to an SOI.")
+    else:
+        button.setText("Save to SOI" if soi_context else "Create SOI")
+        button.setEnabled(bool(has_rows and artifact_id))
+        button.setToolTip(
+            "Save the Feature Analysis Artifact to the selected SOI."
+            if soi_context else
+            "Create an SOI and link the Feature Analysis Artifact and its source Artifact provenance."
         )
-    )
-
-    result_path = str(
-        getattr(
-            dashboard,
-            "tsi_fe_result_report_path",
-            "",
-        )
-        or getattr(
-            dashboard,
-            "tsi_fe_result_feature_path",
-            "",
-        )
-        or ""
-    ).strip()
-
-    has_result_folder = bool(
-        result_path
-        and os.path.isdir(
-            os.path.dirname(result_path)
-        )
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_preview.setEnabled(
-        has_local_file
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_open_folder.setEnabled(
-        has_result_folder
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_export_csv.setEnabled(
-        has_rows
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_export_json.setEnabled(
-        has_rows
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_plot_feature.setEnabled(
-        has_rows and has_features
-    )
-
-    dashboard.ui.pushButton_tsi_fe_results_plot_distribution.setEnabled(
-        has_rows and has_features
-    )
+        if has_rows and not artifact_id:
+            button.setToolTip("Run with Artifact output before saving Feature results to an SOI.")
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -4234,344 +3307,20 @@ def _tsi_fe_soi_display_text(
     return label
 
 
-def _tsi_fe_selected_soi_context(
-    dashboard: QtCore.QObject,
-) -> dict:
-    """
-    Returns the SOI selected directly in Feature Extractor Card 3.
-
-    The combo userData contains:
-        {
-            "soi_key": <dashboard composite key>,
-            "soi_id": <raw SOI ID>,
-            "node_uid": <owning node>,
-            "frequency_mhz": ...,
-            "record": <full SOI record>
-        }
-    """
-    combo = dashboard.ui.comboBox_tsi_fe_run_soi
-    context = combo.currentData()
-
+def _tsi_fe_selected_soi_context(dashboard: QtCore.QObject) -> dict:
+    """Return the optional SOI context selected beside Input Source."""
+    context = dashboard.ui.comboBox_tsi_fe_input_soi.currentData()
     if not isinstance(context, dict):
         return {}
-
-    soi_id = str(
-        context.get("soi_id", "")
-        or ""
-    ).strip()
-
-    soi_key = str(
-        context.get("soi_key", "")
-        or ""
-    ).strip()
-
-    node_uid = str(
-        context.get("node_uid", "")
-        or ""
-    ).strip()
-
-    selected_node_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
+    soi_id = str(context.get("soi_id", "") or "").strip()
+    soi_key = str(context.get("soi_key", "") or "").strip()
+    node_uid = str(context.get("node_uid", "") or "").strip()
+    selected_node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
     if not soi_id or not soi_key:
         return {}
-
-    if (
-        selected_node_uid
-        and node_uid
-        and node_uid != selected_node_uid
-    ):
+    if selected_node_uid and node_uid and node_uid != selected_node_uid:
         return {}
-
     return context
-
-
-def refresh_tsi_fe_run_sois(
-    dashboard: QtCore.QObject,
-):
-    """
-    Repopulates the Card 3 SOI selector from dashboard.tactical_sois.
-
-    Only SOIs owned by the currently selected Sensor Node are shown.
-    The prior selection is preserved when that SOI still exists.
-    """
-    combo = dashboard.ui.comboBox_tsi_fe_run_soi
-
-    previous_context = combo.currentData()
-
-    previous_soi_key = ""
-
-    if isinstance(previous_context, dict):
-        previous_soi_key = str(
-            previous_context.get("soi_key", "")
-            or ""
-        ).strip()
-
-    selected_node_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
-    tactical_sois = (
-        getattr(
-            dashboard,
-            "tactical_sois",
-            {},
-        )
-        or {}
-    )
-
-    rows = []
-
-    if isinstance(tactical_sois, dict):
-        for soi_key, record in tactical_sois.items():
-            if not isinstance(record, dict):
-                continue
-
-            record_node_uid = str(
-                record.get("node_uid", "")
-                or ""
-            ).strip()
-
-            if (
-                selected_node_uid
-                and record_node_uid
-                and record_node_uid != selected_node_uid
-            ):
-                continue
-
-            soi_id = str(
-                record.get("soi_id", "")
-                or ""
-            ).strip()
-
-            if not soi_id:
-                continue
-
-            context = {
-                "soi_key": str(
-                    record.get("soi_key", "")
-                    or soi_key
-                    or ""
-                ).strip(),
-                "soi_id": soi_id,
-                "node_uid": record_node_uid,
-                "frequency_mhz": record.get(
-                    "frequency_mhz"
-                ),
-                "record": dict(record),
-            }
-
-            rows.append(
-                (
-                    _tsi_fe_soi_display_text(
-                        context["soi_key"],
-                        record,
-                    ),
-                    context,
-                )
-            )
-
-    rows.sort(
-        key=lambda row: row[0].lower()
-    )
-
-    combo.blockSignals(True)
-    combo.clear()
-    combo.addItem(
-        "Select SOI...",
-        None,
-    )
-
-    restored_index = -1
-
-    for display_text, context in rows:
-        combo.addItem(
-            display_text,
-            context,
-        )
-
-        if (
-            previous_soi_key
-            and context["soi_key"] == previous_soi_key
-        ):
-            restored_index = combo.count() - 1
-
-    if restored_index >= 0:
-        combo.setCurrentIndex(restored_index)
-    else:
-        combo.setCurrentIndex(0)
-
-    combo.blockSignals(False)
-
-    dashboard.ui.pushButton_tsi_fe_run_soi_refresh.setToolTip(
-        (
-            f"Refresh SOIs for {selected_node_uid}"
-            if selected_node_uid
-            else "Select a Sensor Node before refreshing SOIs"
-        )
-    )
-
-    _tsi_fe_update_destination_state(
-        dashboard
-    )
-    update_tsi_fe_run_start_state(
-        dashboard
-    )
-
-
-def _tsi_fe_update_soi_selector_state(
-    dashboard: QtCore.QObject,
-):
-    """
-    Shows and enables the SOI controls only when the selected destination
-    requires an existing SOI.
-    """
-    destination = str(
-        dashboard.ui.comboBox_tsi_fe_run_destination.currentText()
-        or ""
-    ).strip()
-
-    requires_soi = (
-        destination == "Attach to Existing SOI"
-    )
-
-    selected_node_available = (
-        _tsi_fe_selected_node_available(
-            dashboard
-        )
-    )
-
-    label = dashboard.ui.label2_tsi_fe_run_soi
-    combo = dashboard.ui.comboBox_tsi_fe_run_soi
-    refresh_button = (
-        dashboard.ui.pushButton_tsi_fe_run_soi_refresh
-    )
-
-    label.setVisible(requires_soi)
-    combo.setVisible(requires_soi)
-    refresh_button.setVisible(requires_soi)
-
-    combo.setEnabled(
-        requires_soi
-        and selected_node_available
-        and combo.count() > 1
-    )
-
-    refresh_button.setEnabled(
-        requires_soi
-        and selected_node_available
-    )
-
-    if requires_soi:
-        if not selected_node_available:
-            combo.setToolTip(
-                "Select an available Sensor Node first."
-            )
-        elif combo.count() <= 1:
-            combo.setToolTip(
-                "No SOIs are available for the selected Sensor Node."
-            )
-        else:
-            combo.setToolTip(
-                "Select the existing SOI that will receive the source IQ "
-                "and feature-analysis artifacts."
-            )
-    else:
-        combo.setToolTip("")
-
-
-@QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_RunSOIRefreshClicked(
-    dashboard: QtCore.QObject,
-):
-    refresh_tsi_fe_run_sois(
-        dashboard
-    )
-
-
-@QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_RunSOIChanged(
-    dashboard: QtCore.QObject,
-):
-    _tsi_fe_update_destination_state(
-        dashboard
-    )
-    update_tsi_fe_run_start_state(
-        dashboard
-    )
-
-
-async def _tsi_fe_prompt_new_soi_frequency(
-    dashboard: QtCore.QObject,
-):
-    """
-    Opens a nonblocking frequency dialog that is safe inside a qasync slot.
-
-    Returns:
-        float frequency in MHz, or None when cancelled.
-    """
-    dialog = QtWidgets.QInputDialog(dashboard)
-
-    dialog.setWindowTitle(
-        "Create New SOI"
-    )
-
-    dialog.setLabelText(
-        "Frequency (MHz):"
-    )
-
-    dialog.setInputMode(
-        QtWidgets.QInputDialog.DoubleInput
-    )
-
-    dialog.setDoubleRange(
-        0.000001,
-        1000000.0,
-    )
-
-    dialog.setDoubleDecimals(6)
-    dialog.setDoubleValue(915.0)
-
-    dialog.setWindowModality(
-        QtCore.Qt.WindowModal
-    )
-
-    loop = asyncio.get_running_loop()
-    result_future = loop.create_future()
-
-    def _accepted():
-        if not result_future.done():
-            result_future.set_result(
-                float(dialog.doubleValue())
-            )
-
-    def _rejected():
-        if not result_future.done():
-            result_future.set_result(None)
-
-    dialog.accepted.connect(_accepted)
-    dialog.rejected.connect(_rejected)
-
-    # open() is nonblocking. Do not use exec(), exec_(), or getDouble()
-    # from inside a qasync asyncSlot.
-    dialog.open()
-
-    try:
-        return await result_future
-
-    finally:
-        dialog.deleteLater()
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
@@ -4616,42 +3365,14 @@ def _slotTSI_FE_InputArtifactChanged(
 
 
 @QtCore.pyqtSlot(QtCore.QObject)
-def _slotTSI_FE_InputSOIChanged(
-    dashboard: QtCore.QObject,
-):
-    """
-    Stores the selected SOI context and resolves linked source-IQ files.
-    """
-    context = (
-        dashboard.ui.comboBox_tsi_fe_input_soi
-        .currentData()
-    )
-
-    if not isinstance(context, dict):
-        context = {}
-
-    dashboard.tsi_fe_selected_input_soi = dict(
-        context
-    )
-
-    if context:
-        _tsi_fe_populate_soi_file_list(
-            dashboard,
-            context,
-        )
-    else:
-        dashboard.tsi_fe_selected_input_soi_files = []
-        dashboard.ui.listWidget_tsi_fe_input_files.clear()
-
-        _tsi_fe_update_input_ribbon(
-            dashboard
-        )
-        _tsi_fe_update_preview_gate(
-            dashboard
-        )
-        update_tsi_fe_run_start_state(
-            dashboard
-        )
+def _slotTSI_FE_InputSOIChanged(dashboard: QtCore.QObject):
+    """Apply optional SOI context and refilter Artifact input when active."""
+    context = _tsi_fe_selected_soi_context(dashboard)
+    dashboard.tsi_fe_selected_input_soi = dict(context) if context else {}
+    if _tsi_fe_current_source(dashboard) == "Artifact":
+        refresh_tsi_fe_input_artifacts(dashboard)
+    _tsi_fe_update_result_button_state(dashboard)
+    update_tsi_fe_run_start_state(dashboard)
 
 
 @qasync.asyncSlot(QtCore.QObject)
@@ -4693,50 +3414,6 @@ async def _slotTSI_FE_InputArtifactRefreshClicked(
             refresh_button.setEnabled(True)
 
 
-@qasync.asyncSlot(QtCore.QObject)
-async def _slotTSI_FE_InputSOIRefreshClicked(
-    dashboard: QtCore.QObject,
-):
-    """
-    Requests the authoritative SOI set from HIPRFISR.
-
-    The shared Dashboard response callback updates Tactical SOIs, both Feature
-    Extractor SOI selectors, and linked Artifact metadata.
-    """
-    node_uid = str(
-        getattr(dashboard, "selected_node_uid", "")
-        or ""
-    ).strip()
-
-    if not node_uid:
-        dashboard.logger.warning(
-            "[Feature Extractor] Select a Sensor Node before refreshing SOIs."
-        )
-        return
-
-    refresh_button = getattr(
-        dashboard.ui,
-        "pushButton_tsi_fe_input_soi_refresh",
-        None,
-    )
-
-    if refresh_button is not None:
-        refresh_button.setEnabled(False)
-
-    try:
-        await dashboard.backend.tacticalNodeSoisRefresh(
-            node_uid
-        )
-    except Exception as error:
-        dashboard.logger.error(
-            "[Feature Extractor] Failed requesting SOI refresh: "
-            f"{error}"
-        )
-    finally:
-        if refresh_button is not None:
-            refresh_button.setEnabled(True)
-
-
 def _tsi_fe_artifact_id(
     artifact_key,
     record: dict,
@@ -4767,10 +3444,23 @@ def _tsi_fe_artifact_node_uid(
     return str(
         record.get("node_uid")
         or record.get("source_id")
-        or record.get("sensor_node_id")
         or ""
     ).strip()
 
+
+def _tsi_fe_artifact_file_is_iq(file_record: dict) -> bool:
+    """Return True for directly registered IQ Artifact members."""
+    if not isinstance(file_record, dict):
+        return False
+    metadata = file_record.get("metadata", {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    role = str(file_record.get("role") or metadata.get("role") or "").strip().lower()
+    if role in {"iq_data", "sigmf_data", "iq_burst", "source_iq", "source_iq_v1"}:
+        return True
+    if role in {"bundle", "sigmf_metadata", "operation_metadata", "feature_results", "feature_report", "classification"}:
+        return False
+    name = str(file_record.get("name") or file_record.get("relative_path") or "").strip().lower()
+    return name.endswith((".iq", ".dat", ".bin", ".raw", ".sigmf-data"))
 
 def _tsi_fe_artifact_display_text(
     artifact_id: str,
@@ -4814,84 +3504,37 @@ def _tsi_fe_artifact_display_text(
     return " | ".join(parts)
 
 
-def _tsi_fe_artifact_file_records(
-    dashboard: QtCore.QObject,
-    artifact_id: str,
-    record: dict,
-) -> list:
-    """
-    Return locally cached files for one canonical artifact record.
-
-    The Dashboard transfer cache is the only source of local payload paths.
-    """
+def _tsi_fe_artifact_file_records(dashboard: QtCore.QObject, artifact_id: str, record: dict) -> list:
+    """Build selectable Artifact members from the canonical manifest, adding cache paths when available."""
     if not isinstance(record, dict):
         return []
-
-    controller = getattr(
-        dashboard.backend,
-        "artifact_transfer_controller",
-        None,
-    )
-
-    if controller is None:
-        return []
-
-    local_files = controller.get_local_files(
-        artifact_id
-    )
-
-    manifest = record.get("files")
-
-    if not isinstance(manifest, list):
-        manifest = []
-
-    manifest_by_id = {
-        str(item.get("id", "")): item
-        for item in manifest
-        if isinstance(item, dict)
-        and str(item.get("id", "")).strip()
-    }
-
-    operation_id = str(
-        record.get("operation_id", "")
-        or ""
-    ).strip()
-
+    controller = getattr(dashboard.backend, "artifact_transfer_controller", None)
+    local_files = controller.get_local_files(artifact_id) if controller is not None else {}
+    operation_id = str(record.get("operation_id", "") or "").strip()
     output = []
 
-    for file_id, local_path in local_files.items():
-        if not os.path.isfile(local_path):
+    for file_record in record.get("files", []) or []:
+        if not _tsi_fe_artifact_file_is_iq(file_record):
             continue
+        file_id = str(file_record.get("id", "") or "").strip()
+        name = str(file_record.get("name") or file_record.get("relative_path") or "").strip()
+        if not file_id or not name:
+            continue
+        metadata = file_record.get("metadata", {}) if isinstance(file_record.get("metadata"), dict) else {}
+        output.append({
+            "name": name,
+            "path": str(local_files.get(file_id, "") or "").strip(),
+            "file_id": file_id,
+            "artifact_id": artifact_id,
+            "operation_id": operation_id,
+            "role": str(file_record.get("role") or metadata.get("role") or "").strip(),
+            "sha256": str(file_record.get("sha256", "") or "").strip(),
+            "size_bytes": file_record.get("size", file_record.get("size_bytes", 0)),
+            "source_type": "Artifact",
+            "record": dict(file_record),
+        })
 
-        file_record = dict(
-            manifest_by_id.get(
-                file_id,
-                {},
-            )
-        )
-
-        output.append(
-            {
-                "name": str(
-                    file_record.get("name")
-                    or os.path.basename(local_path)
-                ),
-                "path": local_path,
-                "file_id": file_id,
-                "artifact_id": artifact_id,
-                "operation_id": operation_id,
-                "source_type": "Artifact",
-                "record": file_record,
-            }
-        )
-
-    output.sort(
-        key=lambda item: (
-            item["name"],
-            item["file_id"],
-        )
-    )
-
+    output.sort(key=lambda item: (item["name"].lower(), item["file_id"]))
     return output
 
 
@@ -4975,354 +3618,118 @@ def _tsi_fe_populate_artifact_file_list(
     )
 
 
-def _tsi_fe_render_managed_file_list(
-    dashboard: QtCore.QObject,
-    file_records: list,
-):
-    """
-    Renders filtered Artifact/SOI file rows into the common file list.
-    """
-    list_widget = (
-        dashboard.ui.listWidget_tsi_fe_input_files
-    )
-
-    filtered_files = (
-        _tsi_fe_filter_managed_file_records(
-            dashboard,
-            file_records,
-        )
-    )
-
+def _tsi_fe_render_managed_file_list(dashboard: QtCore.QObject, file_records: list):
+    """Render filtered Artifact members and select all without collapsing ExtendedSelection."""
+    list_widget = dashboard.ui.listWidget_tsi_fe_input_files
+    filtered_files = _tsi_fe_filter_managed_file_records(dashboard, file_records)
     list_widget.blockSignals(True)
     list_widget.clear()
+    list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
     for file_record in filtered_files:
-        item = QtWidgets.QListWidgetItem(
-            str(
-                file_record.get(
-                    "name",
-                    "",
-                )
-                or ""
-            )
-        )
-
-        item.setData(
-            QtCore.Qt.UserRole,
-            file_record,
-        )
-
-        item.setToolTip(
-            str(
-                file_record.get(
-                    "path",
-                    "",
-                )
-                or ""
-            )
-        )
-
-        list_widget.addItem(
-            item
-        )
-
-    list_widget.setSelectionMode(
-        QtWidgets.QAbstractItemView.ExtendedSelection
-    )
-
-    for row in range(
-        list_widget.count()
-    ):
-        list_widget.item(
-            row
-        ).setSelected(True)
+        item = QtWidgets.QListWidgetItem(str(file_record.get("name", "") or ""))
+        item.setData(QtCore.Qt.UserRole, file_record)
+        tooltip = str(file_record.get("path", "") or "").strip()
+        if not tooltip:
+            tooltip = f"Artifact {file_record.get('artifact_id', '')} | {file_record.get('role', '')}"
+        item.setToolTip(tooltip)
+        list_widget.addItem(item)
+        item.setSelected(True)
 
     if list_widget.count() > 0:
-        list_widget.setCurrentRow(0)
+        list_widget.setCurrentItem(list_widget.item(0), QtCore.QItemSelectionModel.NoUpdate)
 
     list_widget.blockSignals(False)
-
-    _tsi_fe_update_input_ribbon(
-        dashboard
-    )
-    _tsi_fe_update_preview_gate(
-        dashboard
-    )
-    update_tsi_fe_run_start_state(
-        dashboard
-    )
+    _tsi_fe_update_input_ribbon(dashboard)
+    _tsi_fe_update_preview_gate(dashboard)
+    update_tsi_fe_run_start_state(dashboard)
 
 
-def refresh_tsi_fe_input_artifacts(
-    dashboard: QtCore.QObject,
-):
-    """
-    Populates the Artifact input selector from dashboard.tactical_artifacts.
+def refresh_tsi_fe_input_artifacts(dashboard: QtCore.QObject):
+    """Populate Artifacts for the selected node, optionally filtered by SOI context."""
+    combo = dashboard.ui.comboBox_tsi_fe_input_artifact
+    previous = combo.currentData()
+    previous_id = str(previous.get("artifact_id", "") or "").strip() if isinstance(previous, dict) else ""
+    selected_node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    soi_context = _tsi_fe_selected_soi_context(dashboard)
+    allowed_ids = None
+    if soi_context:
+        allowed_ids = set(_tsi_fe_soi_source_artifact_ids(soi_context.get("record", {})))
 
-    Only artifacts belonging to the selected Sensor Node are shown.
-    """
-    combo = (
-        dashboard.ui.comboBox_tsi_fe_input_artifact
-    )
-
-    previous_context = combo.currentData()
-
-    previous_artifact_id = ""
-
-    if isinstance(previous_context, dict):
-        previous_artifact_id = str(
-            previous_context.get(
-                "artifact_id",
-                "",
-            )
-            or ""
-        ).strip()
-
-    selected_node_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
-    tactical_artifacts = (
-        getattr(
-            dashboard,
-            "tactical_artifacts",
-            {},
-        )
-        or {}
-    )
-
+    tactical_artifacts = getattr(dashboard, "tactical_artifacts", {}) or {}
+    iterable = tactical_artifacts.items() if isinstance(tactical_artifacts, dict) else enumerate(tactical_artifacts) if isinstance(tactical_artifacts, list) else []
     rows = []
-
-    if isinstance(
-        tactical_artifacts,
-        dict,
-    ):
-        iterable = tactical_artifacts.items()
-
-    elif isinstance(
-        tactical_artifacts,
-        list,
-    ):
-        iterable = enumerate(
-            tactical_artifacts
-        )
-
-    else:
-        iterable = []
-
     for artifact_key, record in iterable:
         if not isinstance(record, dict):
             continue
-
-        artifact_id = _tsi_fe_artifact_id(
-            artifact_key,
-            record,
-        )
-
-        if not artifact_id:
+        artifact_id = _tsi_fe_artifact_id(artifact_key, record)
+        if not artifact_id or (allowed_ids is not None and artifact_id not in allowed_ids):
             continue
-
-        record_node_uid = (
-            _tsi_fe_artifact_node_uid(
-                record
-            )
-        )
-
-        if (
-            selected_node_uid
-            and record_node_uid
-            and record_node_uid
-            != selected_node_uid
-        ):
+        record_node_uid = _tsi_fe_artifact_node_uid(record)
+        if selected_node_uid and record_node_uid and record_node_uid != selected_node_uid:
             continue
+        context = {"artifact_id": artifact_id, "node_uid": record_node_uid, "record": dict(record)}
+        rows.append((_tsi_fe_artifact_display_text(artifact_id, record), context))
 
-        context = {
-            "artifact_id": artifact_id,
-            "node_uid": record_node_uid,
-            "record": dict(record),
-        }
-
-        rows.append(
-            (
-                _tsi_fe_artifact_display_text(
-                    artifact_id,
-                    record,
-                ),
-                context,
-            )
-        )
-
-    rows.sort(
-        key=lambda row: row[0].lower()
-    )
-
+    rows.sort(key=lambda row: row[0].lower())
     combo.blockSignals(True)
     combo.clear()
-    combo.addItem(
-        "Select Artifact...",
-        None,
-    )
-
+    combo.addItem("Select Artifact...", None)
     restored_index = -1
-
     for display_text, context in rows:
-        combo.addItem(
-            display_text,
-            context,
-        )
-
-        if (
-            previous_artifact_id
-            and context["artifact_id"]
-            == previous_artifact_id
-        ):
-            restored_index = (
-                combo.count() - 1
-            )
-
+        combo.addItem(display_text, context)
+        if previous_id and context["artifact_id"] == previous_id:
+            restored_index = combo.count() - 1
     if restored_index >= 0:
-        combo.setCurrentIndex(
-            restored_index
-        )
+        combo.setCurrentIndex(restored_index)
+    elif len(rows) == 1:
+        combo.setCurrentIndex(1)
     else:
         combo.setCurrentIndex(0)
-
     combo.blockSignals(False)
 
-    dashboard.tsi_fe_input_artifacts = [
-        context
-        for _display_text, context in rows
-    ]
-
+    dashboard.tsi_fe_input_artifacts = [context for _display_text, context in rows]
     dashboard.ui.pushButton_tsi_fe_input_artifact_refresh.setToolTip(
-        (
-            f"Refresh artifacts for {selected_node_uid}"
-            if selected_node_uid
-            else "Select a Sensor Node before refreshing artifacts"
-        )
+        f"Refresh artifacts for {selected_node_uid}" if selected_node_uid else "Select a Sensor Node before refreshing artifacts"
     )
-
-    _slotTSI_FE_InputArtifactChanged(
-        dashboard
-    )
+    _slotTSI_FE_InputArtifactChanged(dashboard)
 
 
-def _tsi_fe_collect_artifact_input_parameters(
-    dashboard: QtCore.QObject,
-) -> dict:
-    """
-    Builds operation parameters from the selected Artifact input.
-    """
-    context = getattr(
-        dashboard,
-        "tsi_fe_selected_input_artifact",
-        {},
-    )
-
-    if not isinstance(context, dict):
-        context = {}
-
-    artifact_id = str(
-        context.get("artifact_id", "")
-        or ""
-    ).strip()
-
-    files = []
-
-    for item in (
-        dashboard.ui.listWidget_tsi_fe_input_files
-        .selectedItems()
-    ):
-        item_data = item.data(
-            QtCore.Qt.UserRole
-        )
-
-        if not isinstance(item_data, dict):
-            continue
-
-        filepath = str(
-            item_data.get("path", "")
-            or ""
-        ).strip()
-
-        if filepath and os.path.isfile(filepath):
-            files.append(filepath)
-
-    folder = ""
-
-    if files:
-        parent_folders = {
-            os.path.dirname(path)
-            for path in files
-        }
-
-        if len(parent_folders) == 1:
-            folder = next(
-                iter(parent_folders)
-            )
+def _tsi_fe_collect_artifact_input_parameters(dashboard: QtCore.QObject) -> dict:
+    """Build one identifier-only managed Artifact request for local or remote execution."""
+    context = getattr(dashboard, "tsi_fe_selected_input_artifact", {})
+    context = context if isinstance(context, dict) else {}
+    artifact_id = str(context.get("artifact_id", "") or "").strip()
+    record = context.get("record", {}) if isinstance(context.get("record"), dict) else {}
+    operation_id = str(record.get("operation_id") or (record.get("metadata", {}) if isinstance(record.get("metadata"), dict) else {}).get("operation_id") or "").strip()
+    selected_files = _tsi_fe_selected_managed_file_records(dashboard)
+    soi_context = _tsi_fe_selected_soi_context(dashboard)
+    soi_id = str(soi_context.get("soi_id", "") or "").strip() if soi_context else ""
+    soi_key = str(soi_context.get("soi_key", "") or "").strip() if soi_context else ""
 
     return {
+        "input_source": "Artifact",
+        "managed_input": {
+            "source": "Artifact",
+            "artifact_ids": [artifact_id] if artifact_id else [],
+            "input_soi_id": soi_id,
+            "input_soi_key": soi_key,
+            "artifacts": [{
+                "artifact_id": artifact_id,
+                "operation_id": operation_id,
+                "selected_files": [row for row in selected_files if not row.get("artifact_id") or row.get("artifact_id") == artifact_id],
+            }],
+        },
         "artifact_id": artifact_id,
         "source_artifact_id": artifact_id,
-        "folder": folder,
-        "files": files,
-        "data_type": str(
-            dashboard.ui.comboBox_tsi_fe_input_data_type.currentText()
-            or ""
-        ).strip(),
+        "source_artifact_ids": [artifact_id] if artifact_id else [],
+        "input_soi_id": soi_id,
+        "input_soi_key": soi_key,
+        "input_soi_frequency_mhz": soi_context.get("frequency_mhz") if soi_context else None,
+        "folder": "",
+        "files": [],
+        "data_type": str(dashboard.ui.comboBox_tsi_fe_input_data_type.currentText() or "").strip(),
     }
-
-
-def _tsi_fe_soi_input_display_text(
-    soi_key: str,
-    record: dict,
-) -> str:
-    """
-    Builds the SOI input combo label.
-    """
-    soi_id = str(
-        record.get("soi_id")
-        or soi_key
-        or ""
-    ).strip()
-
-    frequency = record.get(
-        "frequency_mhz"
-    )
-
-    try:
-        frequency_text = (
-            f"{float(frequency):.6f} MHz"
-            if frequency not in [None, "", "None"]
-            else ""
-        )
-    except Exception:
-        frequency_text = str(
-            frequency
-            or ""
-        ).strip()
-
-    status = str(
-        record.get("status")
-        or ""
-    ).strip()
-
-    parts = [
-        value
-        for value in (
-            frequency_text,
-            status,
-            soi_id,
-        )
-        if value
-    ]
-
-    return " | ".join(parts)
 
 
 def _tsi_fe_soi_source_artifact_ids(
@@ -5526,324 +3933,47 @@ def _tsi_fe_find_tactical_artifact(
     return {}
 
 
-def _tsi_fe_resolve_soi_input_files(
-    dashboard: QtCore.QObject,
-    soi_context: dict,
-) -> list:
-    """
-    Resolve all locally cached files from source-IQ artifacts linked to an SOI.
-    """
-    record = soi_context.get(
-        "record",
-        {},
-    )
-
-    artifact_ids = _tsi_fe_soi_source_artifact_ids(
-        record
-    )
-
-    output = []
-    seen_paths = set()
-
-    for artifact_id in artifact_ids:
-        artifact_record = _tsi_fe_find_tactical_artifact(
-            dashboard,
-            artifact_id,
-        )
-
-        if not artifact_record:
-            continue
-
-        for file_record in _tsi_fe_artifact_file_records(
-            dashboard,
-            artifact_id,
-            artifact_record,
-        ):
-            path = str(
-                file_record.get("path", "")
-                or ""
-            ).strip()
-
-            if not path or path in seen_paths:
-                continue
-
-            seen_paths.add(path)
-
-            row = dict(file_record)
-            row["source_type"] = "SOI"
-            row["soi_id"] = str(
-                soi_context.get("soi_id", "")
-                or ""
-            )
-            row["soi_key"] = str(
-                soi_context.get("soi_key", "")
-                or ""
-            )
-
-            output.append(row)
-
-    return output
-
-
-def _tsi_fe_populate_soi_file_list(
-    dashboard: QtCore.QObject,
-    soi_context: dict,
-):
-    """
-    Resolves the selected SOI's source-IQ artifacts and renders their files.
-    """
-    files = _tsi_fe_resolve_soi_input_files(
-        dashboard,
-        soi_context,
-    )
-
-    dashboard.tsi_fe_selected_input_soi_files = files
-
-    _tsi_fe_render_managed_file_list(
-        dashboard,
-        files,
-    )
-
-
-def refresh_tsi_fe_input_sois(
-    dashboard: QtCore.QObject,
-):
-    """
-    Populates the SOI input selector from dashboard.tactical_sois.
-
-    Only SOIs belonging to the selected Sensor Node are shown.
-    """
-    combo = (
-        dashboard.ui.comboBox_tsi_fe_input_soi
-    )
-
-    previous_context = combo.currentData()
-    previous_soi_key = ""
-
-    if isinstance(previous_context, dict):
-        previous_soi_key = str(
-            previous_context.get(
-                "soi_key",
-                "",
-            )
-            or ""
-        ).strip()
-
-    selected_node_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
-    tactical_sois = (
-        getattr(
-            dashboard,
-            "tactical_sois",
-            {},
-        )
-        or {}
-    )
-
+def refresh_tsi_fe_input_sois(dashboard: QtCore.QObject):
+    """Populate optional SOI context for the selected Sensor Node."""
+    combo = dashboard.ui.comboBox_tsi_fe_input_soi
+    previous = combo.currentData()
+    previous_key = str(previous.get("soi_key", "") or "").strip() if isinstance(previous, dict) else ""
+    selected_node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    tactical_sois = getattr(dashboard, "tactical_sois", {}) or {}
+    iterable = tactical_sois.items() if isinstance(tactical_sois, dict) else enumerate(tactical_sois) if isinstance(tactical_sois, list) else []
     rows = []
-
-    if isinstance(tactical_sois, dict):
-        iterable = tactical_sois.items()
-    elif isinstance(tactical_sois, list):
-        iterable = enumerate(tactical_sois)
-    else:
-        iterable = []
 
     for soi_key, record in iterable:
         if not isinstance(record, dict):
             continue
-
-        record_node_uid = str(
-            record.get("node_uid")
-            or ""
-        ).strip()
-
-        if (
-            selected_node_uid
-            and record_node_uid
-            and record_node_uid != selected_node_uid
-        ):
+        record_node_uid = str(record.get("node_uid") or "").strip()
+        if selected_node_uid and record_node_uid and record_node_uid != selected_node_uid:
             continue
-
-        soi_id = str(
-            record.get("soi_id")
-            or ""
-        ).strip()
-
+        soi_id = str(record.get("soi_id") or "").strip()
         if not soi_id:
             continue
-
         context = {
-            "soi_key": str(
-                record.get("soi_key")
-                or soi_key
-                or ""
-            ).strip(),
+            "soi_key": str(record.get("soi_key") or soi_key or "").strip(),
             "soi_id": soi_id,
             "node_uid": record_node_uid,
-            "frequency_mhz": record.get(
-                "frequency_mhz"
-            ),
+            "frequency_mhz": record.get("frequency_mhz"),
             "record": dict(record),
         }
+        rows.append((_tsi_fe_soi_display_text(context["soi_key"], record), context))
 
-        rows.append(
-            (
-                _tsi_fe_soi_input_display_text(
-                    context["soi_key"],
-                    record,
-                ),
-                context,
-            )
-        )
-
-    rows.sort(
-        key=lambda row: row[0].lower()
-    )
-
+    rows.sort(key=lambda row: row[0].lower())
     combo.blockSignals(True)
     combo.clear()
-    combo.addItem(
-        "Select SOI...",
-        None,
-    )
-
-    restored_index = -1
-
+    combo.addItem("Manual / No SOI", None)
+    restored_index = 0
     for display_text, context in rows:
-        combo.addItem(
-            display_text,
-            context,
-        )
-
-        if (
-            previous_soi_key
-            and context["soi_key"]
-            == previous_soi_key
-        ):
+        combo.addItem(display_text, context)
+        if previous_key and context["soi_key"] == previous_key:
             restored_index = combo.count() - 1
-
-    combo.setCurrentIndex(
-        restored_index
-        if restored_index >= 0
-        else 0
-    )
-
+    combo.setCurrentIndex(restored_index)
     combo.blockSignals(False)
-
-    dashboard.tsi_fe_input_sois = [
-        context
-        for _display_text, context in rows
-    ]
-
-    _slotTSI_FE_InputSOIChanged(
-        dashboard
-    )
-
-
-def _tsi_fe_collect_soi_input_parameters(
-    dashboard: QtCore.QObject,
-) -> dict:
-    """
-    Builds operation parameters from the selected SOI input.
-    """
-    context = getattr(
-        dashboard,
-        "tsi_fe_selected_input_soi",
-        {},
-    )
-
-    if not isinstance(context, dict):
-        context = {}
-
-    files = []
-    source_artifact_ids = []
-
-    for item in (
-        dashboard.ui.listWidget_tsi_fe_input_files
-        .selectedItems()
-    ):
-        item_data = item.data(
-            QtCore.Qt.UserRole
-        )
-
-        if not isinstance(item_data, dict):
-            continue
-
-        filepath = str(
-            item_data.get("path", "")
-            or ""
-        ).strip()
-
-        artifact_id = str(
-            item_data.get(
-                "artifact_id",
-                "",
-            )
-            or ""
-        ).strip()
-
-        if (
-            filepath
-            and os.path.isfile(filepath)
-        ):
-            files.append(filepath)
-
-        if (
-            artifact_id
-            and artifact_id not in source_artifact_ids
-        ):
-            source_artifact_ids.append(
-                artifact_id
-            )
-
-    folder = ""
-
-    if files:
-        parent_folders = {
-            os.path.dirname(path)
-            for path in files
-        }
-
-        if len(parent_folders) == 1:
-            folder = next(
-                iter(parent_folders)
-            )
-
-    source_artifact_id = (
-        source_artifact_ids[0]
-        if len(source_artifact_ids) == 1
-        else ""
-    )
-
-    return {
-        "input_soi_id": str(
-            context.get("soi_id", "")
-            or ""
-        ).strip(),
-        "input_soi_key": str(
-            context.get("soi_key", "")
-            or ""
-        ).strip(),
-        "input_soi_frequency_mhz": context.get(
-            "frequency_mhz"
-        ),
-        "source_artifact_id": source_artifact_id,
-        "source_artifact_ids": source_artifact_ids,
-        "folder": folder,
-        "files": files,
-        "data_type": str(
-            dashboard.ui.comboBox_tsi_fe_input_data_type.currentText()
-            or ""
-        ).strip(),
-    }
+    dashboard.tsi_fe_input_sois = [context for _display_text, context in rows]
+    dashboard.tsi_fe_selected_input_soi = _tsi_fe_selected_soi_context(dashboard)
 
 
 def _tsi_fe_set_combo_item_enabled(
@@ -5876,82 +4006,49 @@ def _tsi_fe_selected_node_is_remote(
     )
 
 
-def update_tsi_fe_locality_controls(
-    dashboard: QtCore.QObject,
-):
-    """Apply local/remote Feature Extractor source and destination gating."""
+def update_tsi_fe_locality_controls(dashboard: QtCore.QObject):
+    """Apply local/remote source and destination gating."""
     remote_selected = _tsi_fe_selected_node_is_remote(dashboard)
-
     source_combo = dashboard.ui.comboBox_tsi_fe_input_source
-    local_source_tooltip = (
-        "Files and Folder inputs are available only when the local "
-        "Sensor Node is selected."
-    )
-
+    tooltip = "Files and Folder inputs are available only when the local Sensor Node is selected."
     for source_name in ("Files", "Folder"):
-        _tsi_fe_set_combo_item_enabled(
-            source_combo,
-            source_name,
-            not remote_selected,
-            local_source_tooltip if remote_selected else "",
-        )
-
-    for source_name in ("Artifact", "SOI"):
-        _tsi_fe_set_combo_item_enabled(source_combo, source_name, True)
+        _tsi_fe_set_combo_item_enabled(source_combo, source_name, not remote_selected, tooltip if remote_selected else "")
+    _tsi_fe_set_combo_item_enabled(source_combo, "Artifact", True)
 
     source_changed = False
     if remote_selected and source_combo.currentText() in {"Files", "Folder"}:
-        artifact_index = source_combo.findText("Artifact")
-        if artifact_index >= 0:
+        index = source_combo.findText("Artifact")
+        if index >= 0:
             source_combo.blockSignals(True)
-            source_combo.setCurrentIndex(artifact_index)
+            source_combo.setCurrentIndex(index)
             source_combo.blockSignals(False)
             source_changed = True
 
     destination_combo = dashboard.ui.comboBox_tsi_fe_run_destination
     _tsi_fe_set_combo_item_enabled(
-        destination_combo,
-        "Local Results",
-        not remote_selected,
-        (
-            "Local Results are available only when the local "
-            "Sensor Node is selected."
-            if remote_selected
-            else ""
-        ),
+        destination_combo, "Local Results", not remote_selected,
+        "Local Results are available only when the local Sensor Node is selected." if remote_selected else ""
     )
-
-    for destination_name in (
-        "New Analysis Artifact",
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    ):
-        _tsi_fe_set_combo_item_enabled(destination_combo, destination_name, True)
+    _tsi_fe_set_combo_item_enabled(destination_combo, "Artifact", True)
 
     destination_changed = False
     if remote_selected and destination_combo.currentText() == "Local Results":
-        managed_index = destination_combo.findText("New Analysis Artifact")
-        if managed_index >= 0:
+        index = destination_combo.findText("Artifact")
+        if index >= 0:
             destination_combo.blockSignals(True)
-            destination_combo.setCurrentIndex(managed_index)
+            destination_combo.setCurrentIndex(index)
             destination_combo.blockSignals(False)
             destination_changed = True
 
-    for widget_name in (
-        "pushButton_tsi_fe_input_folder",
-        "pushButton_tsi_fe_input_refresh",
-        "textEdit_tsi_fe_file_path",
-    ):
+    for widget_name in ("pushButton_tsi_fe_input_folder", "pushButton_tsi_fe_input_refresh", "textEdit_tsi_fe_file_path"):
         widget = getattr(dashboard.ui, widget_name, None)
         if widget is not None:
             widget.setEnabled(not remote_selected)
 
     if source_changed:
         _slotTSI_FE_InputSourceChanged(dashboard)
-
     if destination_changed:
         _slotTSI_FE_RunDestinationChanged(dashboard)
-
     _tsi_fe_update_preview_gate(dashboard)
     _tsi_fe_update_destination_state(dashboard)
     update_tsi_fe_run_start_state(dashboard)
@@ -6043,404 +4140,274 @@ def _tsi_fe_selected_managed_file_records(
     return output
 
 
-def _tsi_fe_collect_remote_artifact_input_parameters(
-    dashboard: QtCore.QObject,
-) -> dict:
-    """
-    Builds an identifier-only Artifact input request for a remote Sensor Node.
-
-    No Dashboard-local path is included.
-    """
-    context = getattr(
+def _tsi_fe_optional_new_soi_frequency(dashboard: QtCore.QObject):
+    """Prompt for optional MHz when creating an SOI from Feature results."""
+    report = getattr(dashboard, "tsi_fe_result_report", {}) or {}
+    value = report.get("input_soi_frequency_mhz")
+    if value not in [None, "", "None"]:
+        try:
+            return float(value)
+        except Exception:
+            pass
+    text, ok = QtWidgets.QInputDialog.getText(
         dashboard,
-        "tsi_fe_selected_input_artifact",
-        {},
+        "Create SOI",
+        "Frequency (MHz), or leave blank if unknown:",
+        QtWidgets.QLineEdit.Normal,
+        "",
     )
+    if not ok:
+        return "cancelled"
+    text = str(text or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        fissure.Dashboard.UI_Components.Qt5.errorMessage(f"Invalid frequency value:\n{text}")
+        return "cancelled"
 
-    if not isinstance(context, dict):
-        context = {}
 
-    artifact_id = str(
-        context.get("artifact_id", "")
-        or ""
-    ).strip()
+def _slotTSI_FE_ResultsPromoteToSoiClicked(dashboard: QtCore.QObject):
+    """Save the current Feature Analysis Artifact to an existing or new SOI."""
+    artifact_id = str(getattr(dashboard, "tsi_fe_artifact_id", "") or "").strip()
+    report = getattr(dashboard, "tsi_fe_result_report", {}) or {}
+    if not artifact_id or dashboard.ui.tableWidget_tsi_fe_results.rowCount() <= 0:
+        fissure.Dashboard.UI_Components.Qt5.errorMessage("Run Feature extraction with Artifact output first.")
+        return
 
-    record = context.get(
-        "record",
-        {},
-    )
+    node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    if not node_uid:
+        fissure.Dashboard.UI_Components.Qt5.errorMessage("Select a Sensor Node first.")
+        return
 
-    if not isinstance(record, dict):
-        record = {}
+    context = _tsi_fe_selected_soi_context(dashboard)
+    existing = bool(context)
+    soi_id = str(context.get("soi_id", "") or "").strip() if existing else str(uuid.uuid4())
+    frequency_mhz = None if existing else _tsi_fe_optional_new_soi_frequency(dashboard)
+    if frequency_mhz == "cancelled":
+        return
 
-    operation_id = str(
-        record.get("operation_id")
-        or (
-            record.get("metadata", {})
-            if isinstance(record.get("metadata"), dict)
-            else {}
-        ).get("operation_id")
-        or ""
-    ).strip()
+    operation_id = str(report.get("operation_id", "") or getattr(dashboard, "tsi_fe_operation_id", "") or "").strip()
+    source_artifact_ids = report.get("source_artifact_ids", [])
+    if not isinstance(source_artifact_ids, list):
+        source_artifact_ids = [source_artifact_ids]
+    source_artifact_ids = [
+        str(value or "").strip()
+        for value in source_artifact_ids
+        if str(value or "").strip()
+    ]
 
-    selected_files = (
-        _tsi_fe_selected_managed_file_records(
-            dashboard
-        )
-    )
+    existing_artifact_ids = set()
+    if existing:
+        record = context.get("record", {}) if isinstance(context.get("record"), dict) else {}
+        containers = [record]
+        summary_record = record.get("summary")
+        if isinstance(summary_record, dict):
+            containers.append(summary_record)
+        for container in containers:
+            links = container.get("artifact_links", [])
+            if not isinstance(links, list):
+                continue
+            for link in links:
+                if not isinstance(link, dict):
+                    continue
+                linked_id = str(link.get("artifact_id", "") or "").strip()
+                if linked_id:
+                    existing_artifact_ids.add(linked_id)
 
-    return {
-        "input_source": "Artifact",
-        "managed_input": {
-            "source": "Artifact",
-            "artifact_ids": (
-                [artifact_id]
-                if artifact_id
-                else []
-            ),
-            "input_soi_id": "",
-            "input_soi_key": "",
-            "artifacts": [
-                {
-                    "artifact_id": artifact_id,
-                    "operation_id": operation_id,
-                    "selected_files": [
-                        row
-                        for row in selected_files
-                        if (
-                            not row.get("artifact_id")
-                            or row.get("artifact_id")
-                            == artifact_id
-                        )
-                    ],
-                }
-            ],
-        },
+    artifact_links = [
+        {"artifact_id": source_id, "role": "source_iq", "source": "tsi_feature_extractor"}
+        for source_id in source_artifact_ids
+        if source_id not in existing_artifact_ids and source_id != artifact_id
+    ]
+    artifact_links.append({
         "artifact_id": artifact_id,
-        "source_artifact_id": artifact_id,
-        "source_artifact_ids": (
-            [artifact_id]
-            if artifact_id
-            else []
-        ),
-        "folder": "",
-        "files": [],
-        "data_type": str(
-            dashboard.ui.comboBox_tsi_fe_input_data_type.currentText()
-            or ""
-        ).strip(),
-    }
-
-
-def _tsi_fe_collect_remote_soi_input_parameters(
-    dashboard: QtCore.QObject,
-) -> dict:
-    """
-    Builds an identifier-only SOI input request for a remote Sensor Node.
-
-    The Dashboard resolves the SOI relationship into explicit source Artifact
-    IDs, but does not send Dashboard-local paths.
-    """
-    context = getattr(
-        dashboard,
-        "tsi_fe_selected_input_soi",
-        {},
-    )
-
-    if not isinstance(context, dict):
-        context = {}
-
-    soi_id = str(
-        context.get("soi_id", "")
-        or ""
-    ).strip()
-
-    soi_key = str(
-        context.get("soi_key", "")
-        or ""
-    ).strip()
-
-    selected_files = (
-        _tsi_fe_selected_managed_file_records(
-            dashboard
-        )
-    )
-
-    source_artifact_ids = []
-
-    for row in selected_files:
-        artifact_id = str(
-            row.get("artifact_id", "")
-            or ""
-        ).strip()
-
-        if (
-            artifact_id
-            and artifact_id not in source_artifact_ids
-        ):
-            source_artifact_ids.append(
-                artifact_id
-            )
-
-    if not source_artifact_ids:
-        source_artifact_ids = (
-            _tsi_fe_soi_source_artifact_ids(
-                context.get("record", {})
-            )
-        )
-
-    artifacts = []
-
-    for artifact_id in source_artifact_ids:
-        matching_files = [
-            row
-            for row in selected_files
-            if row.get("artifact_id") == artifact_id
-        ]
-
-        operation_id = ""
-
-        for row in matching_files:
-            operation_id = str(
-                row.get("operation_id", "")
-                or ""
-            ).strip()
-
-            if operation_id:
-                break
-
-        artifacts.append(
-            {
-                "artifact_id": artifact_id,
-                "operation_id": operation_id,
-                "selected_files": matching_files,
-            }
-        )
-
-    source_artifact_id = (
-        source_artifact_ids[0]
-        if len(source_artifact_ids) == 1
-        else ""
-    )
-
-    return {
-        "input_source": "SOI",
-        "managed_input": {
-            "source": "SOI",
-            "artifact_ids": source_artifact_ids,
-            "input_soi_id": soi_id,
-            "input_soi_key": soi_key,
-            "artifacts": artifacts,
-        },
-        "input_soi_id": soi_id,
-        "input_soi_key": soi_key,
-        "input_soi_frequency_mhz": context.get(
-            "frequency_mhz"
-        ),
-        "source_artifact_id": source_artifact_id,
+        "operation_id": operation_id,
+        "role": "feature_analysis",
+        "source": "tsi_feature_extractor",
         "source_artifact_ids": source_artifact_ids,
-        "folder": "",
-        "files": [],
-        "data_type": str(
-            dashboard.ui.comboBox_tsi_fe_input_data_type.currentText()
-            or ""
-        ).strip(),
+    })
+
+    history_entry = {
+        "analysis_id": f"feature_extractor:{operation_id}" if operation_id else f"feature_extractor:{uuid.uuid4()}",
+        "stage": "feature_extractor",
+        "source": "tsi_feature_extractor",
+        "operation_id": operation_id,
+        "artifact_id": artifact_id,
+        "source_artifact_ids": source_artifact_ids,
+        "profile": report.get("profile", ""),
+        "preset": report.get("preset", ""),
+        "feature_count": report.get("feature_count", 0),
+        "result_count": report.get("result_count", 0),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    summary = {"artifact_links": artifact_links, "analysis_history": [history_entry]}
+    if not existing:
+        summary.update({
+            "stage": "feature_extractor_promoted",
+            "stage_order": 60,
+            "source": "tsi_feature_extractor",
+            "operation_id": operation_id,
+            "artifact_id": artifact_id,
+            "source_artifact_ids": source_artifact_ids,
+            "description": "Feature extraction results promoted to SOI",
+            "features": {},
+            "classification": {},
+            "protocol": {},
+            "model_classification": "",
+            "model_confidence": None,
+        })
+
+    button = dashboard.ui.pushButton_tsi_fe_results_promote_to_soi
+    button.setEnabled(False)
+    dashboard.ui.label2_tsi_fe_run_status.setText("Saving to SOI..." if existing else "Creating SOI...")
+    task = asyncio.ensure_future(
+        dashboard.backend.tacticalConditionerPromoteToSoi(
+            node_uid=node_uid,
+            soi_id=soi_id,
+            frequency_mhz=frequency_mhz,
+            status="" if existing else "EVIDENCE_READY",
+            operation_id=operation_id,
+            artifact_id=artifact_id,
+            summary=summary,
+        )
+    )
+
+    def _done(future):
+        try:
+            future.result()
+            dashboard.tsi_fe_result_saved_to_soi = True
+            dashboard.ui.label2_tsi_fe_run_status.setText(
+                f"Saved Feature results to SOI: {soi_id}" if existing else f"Created SOI from Feature results: {soi_id}"
+            )
+        except Exception as error:
+            dashboard.logger.error(f"[Feature Extractor] Failed saving results to SOI: {error}")
+            fissure.Dashboard.UI_Components.Qt5.errorMessage(f"Failed to save Feature results to SOI:\n{error}")
+        finally:
+            _tsi_fe_update_result_button_state(dashboard)
+
+    task.add_done_callback(_done)
+
+def _tsi_fe_cached_artifact_result_paths(dashboard: QtCore.QObject, artifact_id: str) -> tuple:
+    """Return cached Feature JSON/report paths for one completed analysis Artifact."""
+    controller = getattr(dashboard.backend, "artifact_transfer_controller", None)
+    if controller is None:
+        return "", ""
+    local_files = controller.get_local_files(artifact_id) or {}
+    feature_path = report_path = ""
+    for path in local_files.values():
+        name = os.path.basename(str(path or ""))
+        if name == "tsi_features.json" and os.path.isfile(path):
+            feature_path = path
+        elif name == "feature_extraction_report.json" and os.path.isfile(path):
+            report_path = path
+    return feature_path, report_path
+
+def _tsi_fe_load_cached_artifact_results(dashboard: QtCore.QObject, artifact_id: str) -> bool:
+    """Load verified cached Feature Artifact files into the result table."""
+    feature_path, report_path = _tsi_fe_cached_artifact_result_paths(dashboard, artifact_id)
+    if not feature_path or not report_path:
+        return False
+    try:
+        with open(feature_path, "r", encoding="utf-8") as handle:
+            results = json.load(handle)
+        with open(report_path, "r", encoding="utf-8") as handle:
+            report = json.load(handle)
+        if not isinstance(results, list) or not isinstance(report, dict):
+            raise ValueError("Feature Artifact result files have an unexpected format.")
+        dashboard.tsi_fe_artifact_id = artifact_id
+        dashboard.tsi_fe_result_report = report
+        dashboard.tsi_fe_result_feature_path = feature_path
+        dashboard.tsi_fe_result_report_path = report_path
+        dashboard.tsi_fe_result_saved_to_soi = False
+        dashboard.ui.label2_tsi_fe_run_artifact_id.setText(artifact_id or "—")
+        _tsi_fe_populate_results_table(dashboard, results)
+        errors = report.get("errors", []) or []
+        status = f"Completed with {len(errors)} error" if len(errors) == 1 else f"Completed with {len(errors)} errors" if errors else "Completed — Analysis Artifact"
+        dashboard.ui.label2_tsi_fe_run_status.setText(status)
+        _tsi_fe_update_artifact_download_button(dashboard)
+        _tsi_fe_update_result_button_state(dashboard)
+        return True
+    except Exception as error:
+        dashboard.logger.error(f"[Feature Extractor] Failed loading cached analysis Artifact: {error!r}")
+        dashboard.ui.label2_tsi_fe_run_status.setText("Artifact Result Read Failed")
+        return False
 
 
-def handle_tsi_fe_artifact_metadata(
-    dashboard: QtCore.QObject,
-    node_uid: str = "",
-    artifacts=None,
-):
-    """
-    Completes managed Feature Extractor destinations when their matching
-    analysis Artifact appears in the normal Artifact metadata callback.
+def handle_tsi_fe_artifact_download_complete(dashboard: QtCore.QObject, artifact_id: str):
+    """Load a Feature Analysis Artifact after the verified Dashboard cache commit."""
+    expected = str(getattr(dashboard, "tsi_fe_auto_download_artifact_id", "") or "").strip()
+    artifact_id = str(artifact_id or "").strip()
+    if not expected or expected != artifact_id:
+        return
+    dashboard.tsi_fe_auto_download_artifact_id = ""
+    if not _tsi_fe_load_cached_artifact_results(dashboard, artifact_id):
+        dashboard.ui.label2_tsi_fe_run_status.setText("Completed — Artifact Download Failed")
+    _tsi_fe_update_artifact_download_button(dashboard)
 
-    Local Results continue to complete through local filesystem polling.
-    Managed destinations use this callback for both local and remote Sensor
-    Nodes because their authoritative completion signal is Artifact
-    registration, not Dashboard-local output paths.
-    """
+
+def handle_tsi_fe_artifact_metadata(dashboard: QtCore.QObject, node_uid: str = "", artifacts=None):
+    """Complete Artifact output, auto-cache its small JSON payload, and refresh Artifact input."""
     artifacts = artifacts or []
-
     if isinstance(artifacts, dict):
         artifacts = list(artifacts.values())
-
     if not isinstance(artifacts, list):
         artifacts = []
 
-    # The normal Artifact callback runs after DashboardCallbacks updates
-    # dashboard.tactical_artifacts. Keep the Artifact input selector current
-    # even when no Feature Extractor operation is active.
     if _tsi_fe_current_source(dashboard) == "Artifact":
         refresh_tsi_fe_input_artifacts(dashboard)
-
-    if not bool(
-        getattr(
-            dashboard,
-            "tsi_fe_running",
-            False,
-        )
-    ):
+    if not bool(getattr(dashboard, "tsi_fe_running", False)):
         return
 
-    expected_operation_id = str(
-        getattr(
-            dashboard,
-            "tsi_fe_operation_id",
-            "",
-        )
-        or ""
-    ).strip()
-
+    expected_operation_id = str(getattr(dashboard, "tsi_fe_operation_id", "") or "").strip()
     if not expected_operation_id:
         return
-
-    selected_node_uid = str(
-        getattr(
-            dashboard,
-            "selected_node_uid",
-            "",
-        )
-        or ""
-    ).strip()
-
-    callback_node_uid = str(
-        node_uid
-        or ""
-    ).strip()
-
-    if (
-        selected_node_uid
-        and callback_node_uid
-        and callback_node_uid != selected_node_uid
-    ):
+    selected_node_uid = str(getattr(dashboard, "selected_node_uid", "") or "").strip()
+    callback_node_uid = str(node_uid or "").strip()
+    if selected_node_uid and callback_node_uid and callback_node_uid != selected_node_uid:
         return
-
-    managed_destinations = {
-        "New Analysis Artifact",
-        "Attach to Existing SOI",
-        "Create New SOI from Input",
-    }
-
-    active_destination = str(
-        dashboard.ui.comboBox_tsi_fe_run_destination.currentText()
-        or ""
-    ).strip()
-
-    if active_destination not in managed_destinations:
+    if str(dashboard.ui.comboBox_tsi_fe_run_destination.currentText() or "").strip() != "Artifact":
         return
 
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             continue
-
-        metadata = artifact.get(
-            "metadata",
-            {},
-        )
-
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        workflow = str(
-            metadata.get(
-                "workflow",
-                "",
-            )
-            or ""
-        ).strip().lower()
-
-        operation_id = str(
-            artifact.get(
-                "operation_id",
-                "",
-            )
-            or metadata.get(
-                "operation_id",
-                "",
-            )
-            or ""
-        ).strip()
-
-        if workflow != "feature_extractor":
+        metadata = artifact.get("metadata", {}) if isinstance(artifact.get("metadata"), dict) else {}
+        workflow = str(metadata.get("workflow", "") or "").strip().lower()
+        operation_id = str(artifact.get("operation_id") or metadata.get("operation_id") or "").strip()
+        if workflow != "feature_extractor" or operation_id != expected_operation_id:
             continue
 
-        if operation_id != expected_operation_id:
+        artifact_id = str(artifact.get("artifact_id") or artifact.get("id") or "").strip()
+        if not artifact_id:
             continue
-
-        artifact_id = str(
-            artifact.get(
-                "artifact_id",
-                "",
-            )
-            or artifact.get(
-                "id",
-                "",
-            )
-            or ""
-        ).strip()
-
-        artifact_destination = str(
-            metadata.get(
-                "destination",
-                "",
-            )
-            or artifact.get(
-                "destination",
-                "",
-            )
-            or active_destination
-        ).strip()
-
-        if (
-            artifact_destination
-            and artifact_destination not in managed_destinations
-        ):
-            continue
-
         dashboard.tsi_fe_artifact_id = artifact_id
-        dashboard.tsi_fe_result_rows = []
-        dashboard.tsi_fe_result_feature_names = []
-        dashboard.tsi_fe_result_report = dict(
-            metadata
-        )
+        dashboard.tsi_fe_result_report = dict(metadata)
         dashboard.tsi_fe_result_feature_path = ""
         dashboard.tsi_fe_result_report_path = ""
-
-        artifact_label = getattr(
-            dashboard.ui,
-            "label2_tsi_fe_run_artifact_id",
-            None,
-        )
-
-        if artifact_label is not None:
-            artifact_label.setText(
-                artifact_id
-                or "—"
-            )
-        
+        dashboard.tsi_fe_auto_download_artifact_id = artifact_id
+        dashboard.ui.label2_tsi_fe_run_artifact_id.setText(artifact_id)
+        _tsi_fe_finish_local_run(dashboard, status="Downloading Feature Results...", progress=100)
         _tsi_fe_update_artifact_download_button(dashboard)
 
-        table = dashboard.ui.tableWidget_tsi_fe_results
-        table.clear()
-        table.setRowCount(0)
-        table.setColumnCount(0)
+        if _tsi_fe_load_cached_artifact_results(dashboard, artifact_id):
+            dashboard.tsi_fe_auto_download_artifact_id = ""
+            return
 
-        _tsi_fe_finish_local_run(
-            dashboard,
-            status="Completed — Analysis Artifact",
-            progress=100,
-        )
+        async def _request():
+            try:
+                await dashboard.backend.requestDashboardArtifactDownload(artifact_id, open_when_complete=False)
+            except Exception as error:
+                dashboard.logger.error(f"[Feature Extractor] Automatic Artifact download failed: {error!r}")
+                dashboard.tsi_fe_auto_download_artifact_id = ""
+                dashboard.ui.label2_tsi_fe_run_status.setText("Completed — Artifact Download Failed")
+                _tsi_fe_update_artifact_download_button(dashboard)
 
+        asyncio.ensure_future(_request())
         dashboard.logger.info(
-            "[Feature Extractor] Analysis Artifact available: "
-            f"artifact_id={artifact_id!r}, "
-            f"operation_id={operation_id!r}, "
-            f"destination={artifact_destination!r}, "
-            f"node_uid={callback_node_uid!r}, "
-            f"remote_selected={_tsi_fe_selected_node_is_remote(dashboard)!r}"
+            "[Feature Extractor] Analysis Artifact registered; downloading small result payload: "
+            f"artifact_id={artifact_id!r}, operation_id={operation_id!r}, node_uid={callback_node_uid!r}"
         )
         return
 

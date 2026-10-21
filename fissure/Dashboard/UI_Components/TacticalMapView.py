@@ -69,6 +69,8 @@ class TacticalMapView(QtCore.QObject):
         self.reference_items = []
 
         self.show_ce_rings = True
+        self.show_detection_labels = True
+        self.show_target_labels = True      
 
         # Persistent overlay data used to redraw after zoom/map reload
         self.node_records = {}
@@ -89,6 +91,7 @@ class TacticalMapView(QtCore.QObject):
         self.alert_clicked_callback = None
         self.detection_clicked_callback = None
         self.soi_clicked_callback = None
+        self.zoom_changed_callback = None
 
         self._configure_graphics_view()
 
@@ -195,6 +198,12 @@ class TacticalMapView(QtCore.QObject):
             scene_x, scene_y = self.latlon_to_scene(center_lat, center_lon)
             self.graphics_view.resetTransform()
             self.graphics_view.centerOn(scene_x, scene_y)
+
+        if callable(self.zoom_changed_callback):
+            self.zoom_changed_callback(
+                self.map_zoom,
+                list(self.map_available_zooms),
+            )
 
         return True
 
@@ -437,6 +446,25 @@ class TacticalMapView(QtCore.QObject):
         self._replot_overlays()
 
 
+    def set_show_detection_labels(self, enabled):
+        self.show_detection_labels = bool(enabled)
+
+        for record in self.detection_items.values():
+            for item in record.get("items", [])[1:]:
+                item.setVisible(self.show_detection_labels)
+
+
+    def set_show_target_labels(self, enabled):
+        self.show_target_labels = bool(enabled)
+
+        for record in self.target_items.values():
+            # Item 0 is the Target marker. Items 1-9 are the eight outline
+            # text items plus the visible label text. Any later items, such
+            # as the active dot or CE ring, must remain independently visible.
+            for item in record.get("items", [])[1:10]:
+                item.setVisible(self.show_target_labels)
+
+
     # Map navigation
     def center_on_latlon(self, lat, lon):
         scene_x, scene_y = self.latlon_to_scene(lat, lon)
@@ -481,6 +509,10 @@ class TacticalMapView(QtCore.QObject):
 
     def set_soi_clicked_callback(self, callback):
         self.soi_clicked_callback = callback
+
+
+    def set_zoom_changed_callback(self, callback):
+        self.zoom_changed_callback = callback
 
     # -------------------------------------------------------------------------
     # Coordinate conversion
@@ -967,6 +999,14 @@ class TacticalMapView(QtCore.QObject):
                 )
                 ring.setZValue(z_value - 1)
                 items.append(ring)
+
+        if marker_kind == "detection" and not self.show_detection_labels:
+            for item in items[1:10]:
+                item.setVisible(False)
+
+        if marker_kind == "target" and not self.show_target_labels:
+            for item in items[1:10]:
+                item.setVisible(False)
 
         collection[item_id] = {
             # Preserve the authoritative location exactly as received.

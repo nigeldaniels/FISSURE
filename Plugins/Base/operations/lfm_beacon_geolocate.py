@@ -3,7 +3,6 @@
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import sys
@@ -40,6 +39,7 @@ class OperationMain(Operation):
         detection_callback: Union[Callable, None] = None,
         status_callback: Union[Callable, None] = None,
         target_callback: Union[Callable, None] = None,
+        position_callback: Union[Callable, None] = None,
         artifact_manager=None,
         parameters: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -51,6 +51,7 @@ class OperationMain(Operation):
             detection_callback=detection_callback,
             status_callback=status_callback,
             target_callback=target_callback,
+            position_callback=position_callback,
             artifact_manager=artifact_manager,
         )
 
@@ -60,13 +61,10 @@ class OperationMain(Operation):
         self.freq_mhz: float = 433.0
         self.min_detection_interval_s: float = 1.0
         self.description: str = "LFM beacon geolocation"
+        self.gain_default: float = 40.0
+        self.path_loss_n: float = 2.2
+        self.path_loss_p0_db: Optional[float] = None
 
-        self.gpsd_host: str = "127.0.0.1"
-        self.gpsd_port: int = 2947
-        self.gps_refresh_interval: float = 1.0
-
-        self._gps_stop = asyncio.Event()
-        self._current_position = {"lat": None, "lon": None, "alt": 0.0}
         self._last_emit_time: float = 0.0
 
     def _apply_parameters_from_runner(self) -> None:
@@ -94,21 +92,27 @@ class OperationMain(Operation):
             str(p.get("description", self.description)).strip()
             or "LFM beacon geolocation"
         )
-        self.gpsd_host = str(p.get("gpsd_host", self.gpsd_host))
 
         try:
-            self.gpsd_port = int(p.get("gpsd_port", self.gpsd_port))
+            self.gain_default = float(p.get("gain_default", self.gain_default))
         except Exception:
-            self.gpsd_port = 2947
+            self.gain_default = 40.0
 
         try:
-            self.gps_refresh_interval = float(
-                p.get("gps_refresh_interval", self.gps_refresh_interval)
-            )
+            self.path_loss_n = float(p.get("path_loss_n", self.path_loss_n))
         except Exception:
-            self.gps_refresh_interval = 1.0
+            self.path_loss_n = 2.2
 
-        self.resource_args = {"freq_mhz": self.freq_mhz}
+        p0_value = p.get("path_loss_p0_db", self.path_loss_p0_db)
+        if p0_value in (None, ""):
+            self.path_loss_p0_db = None
+        else:
+            try:
+                self.path_loss_p0_db = float(p0_value)
+            except Exception:
+                self.path_loss_p0_db = None
+
+        self.resource_args = {"freq_mhz": self.freq_mhz, "gain_default": self.gain_default}
 
     @staticmethod
     def get_resources(freq_mhz: float = 433.0) -> Dict[str, Any]:
@@ -128,86 +132,47 @@ class OperationMain(Operation):
 
         return script_path
 
-    async def _gps_loop(self) -> None:
-        self.logger.info("Starting GPS loop: GPSD")
-        buf = ""
+    def _snapshot_position(self) -> Dict[str, Any]:
+        try:
+            position = self.position_callback()
+        except Exception as exc:
+            self.logger.warning(f"Position callback failed: {exc}")
+            return {"valid": False, "source": ""}
 
-        while not self._stop and not self._gps_stop.is_set():
-            writer = None
+        if not isinstance(position, dict) or not position.get("valid", False):
+            return {
+                "valid": False,
+                "source": (
+                    str(position.get("source") or "")
+                    if isinstance(position, dict)
+                    else ""
+                ),
+            }
 
-            try:
-                reader, writer = await asyncio.open_connection(
-                    self.gpsd_host,
-                    self.gpsd_port,
-                )
-                writer.write(b'?WATCH={"enable":true,"json":true}\n')
-                await writer.drain()
+        lat = position.get("latitude")
+        lon = position.get("longitude")
+        alt = position.get("altitude")
+        if lat is None or lon is None:
+            return {
+                "valid": False,
+                "source": str(position.get("source") or ""),
+            }
 
-                while not self._stop and not self._gps_stop.is_set():
-                    try:
-                        data = await asyncio.wait_for(
-                            reader.read(4096),
-                            timeout=max(0.25, self.gps_refresh_interval),
-                        )
-                    except asyncio.TimeoutError:
-                        continue
-
-                    if not data:
-                        await asyncio.sleep(0.5)
-                        continue
-
-                    buf += data.decode(errors="ignore")
-
-                    while "\n" in buf:
-                        if self._stop or self._gps_stop.is_set():
-                            break
-
-                        line, buf = buf.split("\n", 1)
-                        if not line.strip():
-                            continue
-
-                        try:
-                            msg = json.loads(line)
-                        except Exception:
-                            continue
-
-                        if msg.get("class") == "TPV" and msg.get("mode", 0) >= 2:
-                            lat = msg.get("lat")
-                            lon = msg.get("lon")
-                            alt = msg.get("altMSL") or msg.get("altHAE") or 0.0
-
-                            if lat is not None and lon is not None:
-                                self._current_position.update(
-                                    {
-                                        "lat": float(lat),
-                                        "lon": float(lon),
-                                        "alt": float(alt),
-                                    }
-                                )
-
-            except asyncio.CancelledError:
-                raise
-
-            except Exception as e:
-                self.logger.warning(f"GPS error: {e}")
-                await asyncio.sleep(2.0)
-
-            finally:
-                if writer is not None:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
-
-        self.logger.info("GPS loop stopped.")
+        return {
+            "valid": True,
+            "source": str(position.get("source") or ""),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "altitude": float(alt or 0.0),
+        }
 
     async def _emit_detection(
         self,
         *,
         label: str,
         frequency_hz: float,
-        metric_db: float,
+        matched_filter_metric: float,
+        power_dbfs_peak: Optional[float],
         det_time: float,
         lat: Union[float, None],
         lon: Union[float, None],
@@ -227,18 +192,31 @@ class OperationMain(Operation):
             "label": label,
             "frequency_hz": int(frequency_hz),
             "frequency_mhz": float(frequency_hz) / 1e6,
-            "power_dbm": float(metric_db),
-            "timestamp": int(ts),
+            "matched_filter_metric": float(matched_filter_metric),
+            "matched_filter_units": "matched_filter_power",
+            "path_loss_n": self.path_loss_n,
+            "timestamp": float(det_time if det_time > 0 else ts),
             "flowgraph_timestamp": float(det_time),
             "detector": "lfm_beacon_geolocate",
             "opid": self.opid,
             "flowgraph": "lfm_beacon_rtlsdr",
             "device": "RTL-SDR",
             "configured_frequency_mhz": self.freq_mhz,
+            "receiver_gain_db": self.gain_default,
             "latitude": lat,
             "longitude": lon,
             "altitude": alt,
         }
+
+        if power_dbfs_peak is not None:
+            detection.update({
+                "metric": float(power_dbfs_peak),
+                "metric_units": "dBFS",
+                "power_dbfs_peak": float(power_dbfs_peak),
+            })
+
+        if self.path_loss_p0_db is not None:
+            detection["path_loss_p0_db"] = self.path_loss_p0_db
 
         if self.detection_callback:
             try:
@@ -252,13 +230,19 @@ class OperationMain(Operation):
 
         if self.alert_callback:
             try:
+                power_text = (
+                    f", peak {power_dbfs_peak:.2f} dBFS"
+                    if power_dbfs_peak is not None
+                    else ""
+                )
                 await asyncio.wait_for(
                     self.alert_callback(
                         self.node_uid,
                         self.opid,
                         (
                             f"{self.description} {self.target_id} "
-                            f"@ {frequency_hz / 1e6:.3f} MHz, metric {metric_db:.2f}"
+                            f"@ {frequency_hz / 1e6:.3f} MHz, "
+                            f"matched metric {matched_filter_metric:.2f}{power_text}"
                         ),
                         self.logger,
                     ),
@@ -289,12 +273,12 @@ class OperationMain(Operation):
             script_path,
             "--rx-freq-default",
             str(configured_freq_hz),
+            "--gain-default",
+            str(self.gain_default),
         ]
 
         self.logger.info(f"Using LFM beacon flow graph: {script_path}")
         self.logger.info(f"Starting LFM beacon flow graph: {' '.join(cmd)}")
-
-        gps_task = asyncio.create_task(self._gps_loop())
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -351,12 +335,18 @@ class OperationMain(Operation):
                     self.logger.warning(f"Unexpected TSI format: {text}")
                     continue
 
-                _, label, freq_str, metric_str, tstamp_str = parts[:5]
+                _, label, freq_str, matched_metric_str, tstamp_str = parts[:5]
+                power_dbfs_peak_str = parts[5] if len(parts) >= 6 else ""
 
                 try:
                     frequency_hz = float(freq_str)
-                    metric = float(metric_str)
+                    matched_filter_metric = float(matched_metric_str)
                     det_time = float(tstamp_str)
+                    power_dbfs_peak = (
+                        float(power_dbfs_peak_str)
+                        if power_dbfs_peak_str not in (None, "")
+                        else None
+                    )
                 except ValueError:
                     self.logger.warning(f"Could not parse TSI line: {text}")
                     continue
@@ -367,25 +357,37 @@ class OperationMain(Operation):
 
                 self._last_emit_time = now
 
-                lat = self._current_position.get("lat")
-                lon = self._current_position.get("lon")
-                alt = self._current_position.get("alt")
-
-                if lat is None or lon is None:
+                position = self._snapshot_position()
+                if position.get("valid"):
+                    lat = position.get("latitude")
+                    lon = position.get("longitude")
+                    alt = position.get("altitude")
+                else:
+                    lat = None
+                    lon = None
+                    alt = None
                     self.logger.debug(
-                        "LFM beacon measurement received before GPS fix; emitting detection without node position."
+                        "LFM beacon measurement received without valid Sensor Node position; "
+                        "emitting detection without node position."
                     )
 
+                power_text = (
+                    f"{power_dbfs_peak:.2f} dBFS"
+                    if power_dbfs_peak is not None
+                    else "unavailable"
+                )
                 self.logger.info(
                     f"LFM beacon measurement for {self.target_id}: "
                     f"label={label}, freq_mhz={frequency_hz / 1e6:.6f}, "
-                    f"metric={metric:.2f}, lat={lat}, lon={lon}"
+                    f"matched_metric={matched_filter_metric:.2f}, "
+                    f"peak_power={power_text}, lat={lat}, lon={lon}"
                 )
 
                 await self._emit_detection(
                     label=label,
                     frequency_hz=frequency_hz,
-                    metric_db=metric,
+                    matched_filter_metric=matched_filter_metric,
+                    power_dbfs_peak=power_dbfs_peak,
                     det_time=det_time if det_time > 0 else now,
                     lat=lat,
                     lon=lon,
@@ -405,13 +407,6 @@ class OperationMain(Operation):
             raise
 
         finally:
-            self._gps_stop.set()
-
-            if gps_task and not gps_task.done():
-                gps_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await gps_task
-
             if stderr_task and not stderr_task.done():
                 stderr_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
